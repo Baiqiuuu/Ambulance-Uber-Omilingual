@@ -1,0 +1,21 @@
+{
+  "name": "@app/electron",
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "cross-env ELECTRON_DISABLE_SECURITY_WARNINGS=1 electron .",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^28.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "cross-env": "^7.0.3",
+    "electron-builder": "^24.9.1"
+  }
+}
+
+

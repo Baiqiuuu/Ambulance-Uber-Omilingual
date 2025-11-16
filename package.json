@@ -1,0 +1,19 @@
+{
+  "name": "ambulance-uber",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "pnpm --filter @app/web dev",
+    "dev:electron": "pnpm --filter @app/electron dev",
+    "dev:server": "pnpm --filter @app/server start:dev",
+    "dev": "concurrently -n WEB,SERVER -c blue,green \"pnpm dev:web\" \"pnpm dev:server\"",
+    "build": "pnpm -r build",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down -v"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  },
+  "packageManager": "pnpm@10.22.0"
+}
