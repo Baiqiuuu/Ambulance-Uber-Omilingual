@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryGateway } from './telemetry.gateway';
 import { Vehicle } from './vehicle.entity';
 import { Dispatch } from './dispatch.entity';
+import { LocationsModule } from './locations/locations.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { Dispatch } from './dispatch.entity';
       },
     }),
     TypeOrmModule.forFeature([Vehicle, Dispatch]),
+    LocationsModule,
   ],
   providers: [TelemetryGateway],
 })
