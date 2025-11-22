@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryGateway } from './telemetry.gateway';
+import { VehicleController } from './vehicle.controller';
 import { Vehicle } from './vehicle.entity';
 import { Dispatch } from './dispatch.entity';
 
@@ -39,6 +40,7 @@ import { Dispatch } from './dispatch.entity';
     }),
     TypeOrmModule.forFeature([Vehicle, Dispatch]),
   ],
+  controllers: [VehicleController],
   providers: [TelemetryGateway],
 })
 export class AppModule {}
