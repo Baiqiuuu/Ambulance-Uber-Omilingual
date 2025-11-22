@@ -63,7 +63,7 @@ export class TelemetryGateway implements OnGatewayInit {
   }
 
   // 手动发送车辆位置（用于位置分享）
-  emitVehicleLocation(vehicleId: string, lat: number, lng: number) {
+  emitVehicleLocation(vehicleId: string, lat: number, lng: number, status?: string, name?: string) {
     // 保存位置
     this.vehiclePositions.set(vehicleId, { lat, lng });
     
@@ -72,6 +72,8 @@ export class TelemetryGateway implements OnGatewayInit {
       id: vehicleId,
       lat,
       lng,
+      status,
+      name,
     });
   }
 

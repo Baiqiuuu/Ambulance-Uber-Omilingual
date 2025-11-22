@@ -10,9 +10,31 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-type Vehicle = { id: string; lat: number; lng: number };
+type Vehicle = { id: string; lat: number; lng: number; status?: string; name?: string };
 type Coordinate = { id: string; lat: number; lng: number };
 type SharedLocation = { id: string; lat: number; lng: number; message?: string };
+type MedicalVehicle = {
+  id: string;
+  name?: string;
+  latitude: number;
+  longitude: number;
+  status: 'vacant' | 'on_duty';
+  lastUpdate?: string;
+};
+
+type ViewMode = 'user' | 'medical';
+type AED = {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  address?: string;
+  building?: string;
+  floor?: string;
+  description?: string;
+  accessType: string;
+  status: string;
+};
 
 type MapStyle = 'satellite' | 'street';
 
@@ -22,10 +44,24 @@ const MAP_STYLES: Record<MapStyle, string> = {
 };
 
 export default function Home() {
+  const [viewMode, setViewMode] = useState<ViewMode>('user');
+  
+  // Update ref when viewMode changes
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [medicalVehicles, setMedicalVehicles] = useState<MedicalVehicle[]>([]);
   const [coordinates, setCoordinates] = useState<Coordinate[]>([]);
   const [sharedLocation, setSharedLocation] = useState<SharedLocation | null>(null);
+  const [aeds, setAeds] = useState<AED[]>([]);
+  const [showAEDs, setShowAEDs] = useState(true);
   const [mapLoaded, setMapLoaded] = useState(false);
+  
+  // Medical mode states
+  const [showMedicalPanel, setShowMedicalPanel] = useState(false);
+  const [selectedVehicle, setSelectedVehicle] = useState<MedicalVehicle | null>(null);
+  const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null);
   const [mapStyle, setMapStyle] = useState<MapStyle>('street');
   const [showSharePanel, setShowSharePanel] = useState(false);
   const [showAddCoordinatePanel, setShowAddCoordinatePanel] = useState(false);
@@ -40,6 +76,7 @@ export default function Home() {
   const modelLoadedRef = useRef(false);
   const socketRef = useRef<any>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
+  const viewModeRef = useRef<ViewMode>('user');
   
   useEffect(() => {
     const wsBase = process.env.NEXT_PUBLIC_WS_BASE || 'http://localhost:4000';
@@ -57,6 +94,8 @@ export default function Home() {
     
     socket.on('vehicle:telemetry', (v: Vehicle) => {
       console.log('Received vehicle data:', v);
+      
+      // Show all vehicles in both modes
       setVehicles(prev => {
         const existing = prev.find(x => x.id === v.id);
         // If position hasn't changed significantly, don't update (avoid unnecessary re-renders)
@@ -83,7 +122,88 @@ export default function Home() {
     return () => {
       socket.close();
     };
-  }, []);
+  }, [viewMode]);
+
+  // Fetch medical vehicles when in medical mode
+  useEffect(() => {
+    if (viewMode === 'medical') {
+      const fetchMedicalVehicles = async () => {
+        try {
+          const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+          const response = await fetch(`${apiBase}/api/medical/vehicles`);
+          const result = await response.json();
+          if (result.success) {
+            setMedicalVehicles(result.vehicles || []);
+            console.log(`Loaded ${result.vehicles?.length || 0} medical vehicles`);
+          }
+        } catch (error) {
+          console.error('Failed to fetch medical vehicles:', error);
+        }
+      };
+
+      fetchMedicalVehicles();
+      // Refresh every 5 seconds
+      const interval = setInterval(fetchMedicalVehicles, 5000);
+      return () => clearInterval(interval);
+    } else {
+      // Stop tracking when switching to user mode
+      if (trackingInterval) {
+        clearInterval(trackingInterval);
+        setTrackingInterval(null);
+        setSelectedVehicle(null);
+      }
+    }
+  }, [viewMode, trackingInterval]);
+
+  // Fetch AEDs from API
+  useEffect(() => {
+    const fetchAEDs = async () => {
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+        const map = mapRef.current?.getMap();
+        
+        if (map && mapLoaded) {
+          const center = map.getCenter();
+          // Fetch AEDs within 10km radius of map center
+          const response = await fetch(
+            `${apiBase}/api/aed?lat=${center.lat}&lng=${center.lng}&radius=10`
+          );
+          const result = await response.json();
+          if (result.success) {
+            setAeds(result.aeds || []);
+            console.log(`Loaded ${result.aeds?.length || 0} AEDs`);
+          }
+        } else {
+          // If map not loaded, fetch all AEDs
+          const response = await fetch(`${apiBase}/api/aed`);
+          const result = await response.json();
+          if (result.success) {
+            setAeds(result.aeds || []);
+            console.log(`Loaded ${result.aeds?.length || 0} AEDs`);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch AEDs:', error);
+      }
+    };
+
+    fetchAEDs();
+    
+    // Refresh AEDs when map moves (debounced)
+    const map = mapRef.current?.getMap();
+    if (map && mapLoaded) {
+      const handleMoveEnd = () => {
+        const center = map.getCenter();
+        fetchAEDs();
+      };
+      
+      map.on('moveend', handleMoveEnd);
+      
+      return () => {
+        map.off('moveend', handleMoveEnd);
+      };
+    }
+  }, [mapLoaded]);
 
   // Share location to server
   const shareLocation = useCallback(async (lat: number, lng: number, message?: string, vehicleId = 'SHARED-1') => {
@@ -194,6 +314,177 @@ export default function Home() {
     setNewCoordLat('');
     setNewCoordLng('');
   };
+
+  // Medical mode functions
+  const registerAmbulance = useCallback(async () => {
+    if (!navigator.geolocation) {
+      alert('Your browser does not support geolocation');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+          const response = await fetch(`${apiBase}/api/medical/vehicles/register`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              status: 'vacant',
+            }),
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            alert(`Ambulance registered successfully! ID: ${result.vehicle.id}`);
+            // Refresh vehicle list
+            const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+            const vehiclesResult = await vehiclesResponse.json();
+            if (vehiclesResult.success) {
+              setMedicalVehicles(vehiclesResult.vehicles || []);
+            }
+          } else {
+            alert(`Failed to register ambulance: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('Failed to register ambulance:', error);
+          alert('Failed to register ambulance. Please try again.');
+        }
+      },
+      (error) => {
+        console.error('Failed to get location:', error);
+        alert('Unable to get current location. Please check browser permission settings.');
+      }
+    );
+  }, []);
+
+  const updateVehicleLocation = useCallback(async (vehicleId: string) => {
+    if (!navigator.geolocation) {
+      alert('Your browser does not support geolocation');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+          const response = await fetch(`${apiBase}/api/medical/vehicles/${vehicleId}/location`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            }),
+          });
+
+          const result = await response.json();
+          if (result.success) {
+            console.log('Location updated successfully');
+            // Refresh vehicle list
+            const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+            const vehiclesResult = await vehiclesResponse.json();
+            if (vehiclesResult.success) {
+              setMedicalVehicles(vehiclesResult.vehicles || []);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to update location:', error);
+        }
+      },
+      (error) => {
+        console.error('Failed to get location:', error);
+      }
+    );
+  }, []);
+
+  const updateVehicleStatus = useCallback(async (vehicleId: string, status: 'vacant' | 'on_duty') => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      const response = await fetch(`${apiBase}/api/medical/vehicles/${vehicleId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        // Refresh vehicle list
+        const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+        const vehiclesResult = await vehiclesResponse.json();
+        if (vehiclesResult.success) {
+          setMedicalVehicles(vehiclesResult.vehicles || []);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to update status:', error);
+    }
+  }, []);
+
+  const startTracking = useCallback((vehicleId: string) => {
+    // Stop existing tracking if any
+    if (trackingInterval) {
+      clearInterval(trackingInterval);
+    }
+
+    // Update location immediately
+    updateVehicleLocation(vehicleId);
+
+    // Set up interval to update every 5 seconds
+    const interval = setInterval(() => {
+      updateVehicleLocation(vehicleId);
+    }, 5000);
+
+    setTrackingInterval(interval);
+    setSelectedVehicle(medicalVehicles.find(v => v.id === vehicleId) || null);
+  }, [trackingInterval, medicalVehicles, updateVehicleLocation]);
+
+  const stopTracking = useCallback(() => {
+    if (trackingInterval) {
+      clearInterval(trackingInterval);
+      setTrackingInterval(null);
+    }
+    setSelectedVehicle(null);
+  }, [trackingInterval]);
+
+  const deleteVehicle = useCallback(async (vehicleId: string) => {
+    if (!confirm('Are you sure you want to delete this ambulance?')) {
+      return;
+    }
+
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      const response = await fetch(`${apiBase}/api/medical/vehicles/${vehicleId}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        // Remove from local state
+        setMedicalVehicles(prev => prev.filter(v => v.id !== vehicleId));
+        setVehicles(prev => prev.filter(v => v.id !== vehicleId));
+        
+        // Stop tracking if this vehicle was being tracked
+        if (selectedVehicle?.id === vehicleId) {
+          stopTracking();
+        }
+        
+        alert('Ambulance deleted successfully');
+      } else {
+        alert(`Failed to delete ambulance: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('Failed to delete vehicle:', error);
+      alert('Failed to delete ambulance. Please try again.');
+    }
+  }, [selectedVehicle, stopTracking]);
 
   // Generate share link
   const generateShareLink = (lat: number, lng: number, message?: string) => {
@@ -761,18 +1052,57 @@ export default function Home() {
 
         {/* Fallback markers - only shown when 3D model not loaded or not ready */}
         {/* Hide fallback markers when model is ready to avoid showing emoji instead of 3D model */}
+        {/* Show all vehicles in both modes */}
         {mapLoaded && !modelReady && vehicles.length > 0 && vehicles.map(v => (
-          <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
-            <div className="bg-red-600 text-white text-xs px-2 py-1 rounded shadow-lg border-2 border-white">
-              🚑 {v.id}
-            </div>
-          </Marker>
-        ))}
+            <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
+              <div className={`text-white text-xs px-2 py-1 rounded shadow-lg border-2 border-white ${
+                v.status === 'on_duty' ? 'bg-red-600' : 'bg-gray-500'
+              }`}>
+                🚑 {v.name || v.id.slice(0, 8)}
+                {v.status && (
+                  <div className="text-[10px] mt-0.5">
+                    {v.status === 'on_duty' ? 'ON DUTY' : 'VACANT'}
+                  </div>
+                )}
+              </div>
+            </Marker>
+          ))}
 
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
           <Marker key={coord.id} longitude={coord.lng} latitude={coord.lat}>
             <div className="text-3xl">🏠</div>
+          </Marker>
+        ))}
+
+        {/* AED markers */}
+        {showAEDs && aeds.map(aed => (
+          <Marker key={aed.id} longitude={aed.longitude} latitude={aed.latitude}>
+            <div className="relative group">
+              <div className="bg-red-600 w-8 h-8 rounded-full border-2 border-white shadow-lg flex items-center justify-center cursor-pointer hover:scale-110 transition-transform">
+                <span className="text-white text-sm font-bold">AED</span>
+              </div>
+              {/* Tooltip on hover */}
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-48 bg-white rounded-lg shadow-xl p-3 border border-gray-200 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
+                <div className="text-sm font-semibold text-gray-800 mb-1">{aed.name}</div>
+                {aed.address && (
+                  <div className="text-xs text-gray-600 mb-1">📍 {aed.address}</div>
+                )}
+                {aed.building && (
+                  <div className="text-xs text-gray-600 mb-1">🏢 {aed.building}</div>
+                )}
+                {aed.floor && (
+                  <div className="text-xs text-gray-600 mb-1">🪜 Floor: {aed.floor}</div>
+                )}
+                {aed.description && (
+                  <div className="text-xs text-gray-500 mt-1">{aed.description}</div>
+                )}
+                <div className="text-xs text-gray-500 mt-1">
+                  Access: {aed.accessType} | Status: {aed.status}
+                </div>
+                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
+              </div>
+            </div>
           </Marker>
         ))}
 
@@ -796,7 +1126,9 @@ export default function Home() {
         {/* Debug info */}
         {process.env.NODE_ENV === 'development' && (
           <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
-            <div>Vehicles: {vehicles.length}</div>
+            <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
+            <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => v.status === 'vacant').length})</div>
+            {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
             <div>Coordinates: {coordinates.length}</div>
             <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
             <div>3D model ready: {modelReady ? 'Yes' : 'No'}</div>
@@ -804,7 +1136,7 @@ export default function Home() {
               <div className="mt-1">
                 {vehicles.map(v => (
                   <div key={v.id}>
-                    {v.id}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)}
+                    {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} ({v.status || 'unknown'})
                   </div>
                 ))}
               </div>
@@ -813,18 +1145,30 @@ export default function Home() {
         )}
       </MapGL>
       
-      {/* Test button - top left */}
-      <div className="absolute top-4 left-4 z-10">
+      {/* View mode toggle button - top left */}
+      <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
         <button
-          onClick={toggleVehicleLock}
+          onClick={() => setViewMode(viewMode === 'user' ? 'medical' : 'user')}
           className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
-            isPositionLocked
-              ? 'bg-red-600 text-white hover:bg-red-700'
-              : 'bg-yellow-500 text-white hover:bg-yellow-600'
+            viewMode === 'medical'
+              ? 'bg-blue-600 text-white hover:bg-blue-700'
+              : 'bg-gray-600 text-white hover:bg-gray-700'
           }`}
         >
-          {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
+          {viewMode === 'medical' ? '🏥 Medical Mode' : '👤 User Mode'}
         </button>
+        {viewMode === 'user' && (
+          <button
+            onClick={toggleVehicleLock}
+            className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+              isPositionLocked
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-yellow-500 text-white hover:bg-yellow-600'
+            }`}
+          >
+            {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
+          </button>
+        )}
       </div>
       
       {/* Map style toggle buttons */}
@@ -849,22 +1193,43 @@ export default function Home() {
         >
           🛰️ Satellite Map
         </button>
+        {viewMode === 'user' && (
+          <button
+            onClick={() => setShowSharePanel(!showSharePanel)}
+            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-green-600 text-white hover:bg-green-700"
+          >
+            📍 Share Location
+          </button>
+        )}
         <button
-          onClick={() => setShowSharePanel(!showSharePanel)}
-          className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-green-600 text-white hover:bg-green-700"
+          onClick={() => setShowAEDs(!showAEDs)}
+          className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+            showAEDs
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+          }`}
         >
-          📍 Share Location
+          {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
         </button>
       </div>
 
-      {/* Add Coordinate button - bottom right */}
-      <div className="absolute bottom-4 right-4 z-10">
-        <button
-          onClick={() => setShowAddCoordinatePanel(!showAddCoordinatePanel)}
-          className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-purple-600 text-white hover:bg-purple-700"
-        >
-          ➕ Add New Coordinate
-        </button>
+      {/* Bottom right buttons - different for each mode */}
+      <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-2">
+        {viewMode === 'user' ? (
+          <button
+            onClick={() => setShowAddCoordinatePanel(!showAddCoordinatePanel)}
+            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-purple-600 text-white hover:bg-purple-700"
+          >
+            ➕ Add New Coordinate
+          </button>
+        ) : (
+          <button
+            onClick={() => setShowMedicalPanel(!showMedicalPanel)}
+            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-blue-600 text-white hover:bg-blue-700"
+          >
+            🏥 Medical Panel
+          </button>
+        )}
       </div>
 
       {/* Location share panel */}
@@ -1008,6 +1373,121 @@ export default function Home() {
             >
               Add Coordinate
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Medical Panel */}
+      {showMedicalPanel && viewMode === 'medical' && (
+        <div className="absolute bottom-20 right-4 z-10 bg-white rounded-lg shadow-xl p-4 w-96 max-h-[80vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-bold text-gray-800">Medical Institution Panel</h3>
+            <button
+              onClick={() => setShowMedicalPanel(false)}
+              className="text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            {/* Register new ambulance */}
+            <div className="border-b pb-4">
+              <h4 className="font-semibold text-gray-700 mb-2">Register Ambulance</h4>
+              <button
+                onClick={registerAmbulance}
+                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              >
+                📍 Register Using Current Location
+              </button>
+            </div>
+
+            {/* Vehicle list */}
+            <div>
+              <h4 className="font-semibold text-gray-700 mb-2">
+                Your Ambulances ({medicalVehicles.length})
+              </h4>
+              {medicalVehicles.length === 0 ? (
+                <p className="text-sm text-gray-500">No ambulances registered yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {medicalVehicles.map(vehicle => (
+                    <div
+                      key={vehicle.id}
+                      className={`p-3 rounded-lg border-2 ${
+                        selectedVehicle?.id === vehicle.id
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <div className="font-semibold text-gray-800">
+                            {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
+                          </div>
+                        </div>
+                        <span
+                          className={`px-2 py-1 rounded text-xs font-semibold ${
+                            vehicle.status === 'on_duty'
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-green-100 text-green-700'
+                          }`}
+                        >
+                          {vehicle.status === 'on_duty' ? 'ON DUTY' : 'VACANT'}
+                        </span>
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={() => updateVehicleLocation(vehicle.id)}
+                          className="flex-1 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+                        >
+                          📍 Update Location
+                        </button>
+                        <button
+                          onClick={() =>
+                            updateVehicleStatus(
+                              vehicle.id,
+                              vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
+                            )
+                          }
+                          className="flex-1 px-2 py-1 bg-yellow-500 text-white text-xs rounded hover:bg-yellow-600"
+                        >
+                          {vehicle.status === 'on_duty' ? 'Set Vacant' : 'Set On Duty'}
+                        </button>
+                      </div>
+
+                      <div className="mt-2 space-y-2">
+                        {selectedVehicle?.id === vehicle.id && trackingInterval ? (
+                          <button
+                            onClick={stopTracking}
+                            className="w-full px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                          >
+                            ⏹️ Stop Tracking
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => startTracking(vehicle.id)}
+                            className="w-full px-2 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600"
+                          >
+                            ▶️ Start Real-time Tracking
+                          </button>
+                        )}
+                        <button
+                          onClick={() => deleteVehicle(vehicle.id)}
+                          className="w-full px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                        >
+                          🗑️ Delete Ambulance
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
