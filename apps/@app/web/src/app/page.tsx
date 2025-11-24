@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import MapGL, { Marker, MapLayerMouseEvent } from 'react-map-gl';
 import { io } from 'socket.io-client';
 import 'mapbox-gl/dist/mapbox-gl.css';
@@ -22,6 +22,11 @@ export default function Home() {
   const [nearest, setNearest] = useState<NearestLocation[] | null>(null);
   const [nearestLoading, setNearestLoading] = useState(false);
   const [nearestError, setNearestError] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarPosition, setSidebarPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const sidebarRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     const socket = io(process.env.NEXT_PUBLIC_WS_BASE!, { transports: ['websocket'] });
@@ -97,6 +102,56 @@ export default function Home() {
     return `${value} m`;
   }, []);
 
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (sidebarRef.current) {
+      e.preventDefault();
+      setIsDragging(true);
+      const rect = sidebarRef.current.getBoundingClientRect();
+      // Get current position (either from state or from current rect position)
+      const currentX = sidebarPosition?.x ?? rect.left;
+      const currentY = sidebarPosition?.y ?? rect.top;
+      setDragStart({
+        x: e.clientX - currentX,
+        y: e.clientY - currentY,
+      });
+    }
+  }, [sidebarPosition]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDragging && sidebarRef.current) {
+        const sidebarWidth = sidebarCollapsed ? 48 : 256;
+        const sidebarHeight = sidebarRef.current.offsetHeight;
+        
+        // Calculate new position relative to viewport
+        const newLeft = e.clientX - dragStart.x;
+        const newTop = e.clientY - dragStart.y;
+        
+        // Constrain to viewport bounds
+        const maxLeft = window.innerWidth - sidebarWidth - 16;
+        const maxTop = window.innerHeight - Math.min(sidebarHeight, window.innerHeight * 0.7) - 16;
+        
+        setSidebarPosition({
+          x: Math.max(16, Math.min(newLeft, maxLeft)),
+          y: Math.max(16, Math.min(newTop, maxTop)),
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, dragStart, sidebarCollapsed]);
+
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
@@ -163,46 +218,105 @@ export default function Home() {
         <div>Lat: {clickedCoord ? clickedCoord.lat.toFixed(5) : '--.--'}</div>
         <div>Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
       </div>
-      <div className="absolute right-4 top-4 w-64 max-h-[70vh] overflow-hidden flex flex-col bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-100">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nearby Language Points</p>
-          {clickedCoord ? (
-            <p className="text-sm text-gray-700 mt-1">
-              Lat {clickedCoord.lat.toFixed(3)}, Lng {clickedCoord.lng.toFixed(3)}
-            </p>
+      <div 
+        ref={sidebarRef}
+        className={`absolute ${sidebarCollapsed ? 'w-12' : 'w-64'} max-h-[70vh] overflow-hidden flex flex-col bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-100 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-300'} ${!sidebarPosition ? 'left-1/2 -translate-x-1/2' : ''}`}
+        style={{
+          left: sidebarPosition ? sidebarPosition.x : undefined,
+          top: sidebarPosition ? sidebarPosition.y : 16,
+          right: sidebarPosition ? 'auto' : undefined,
+        }}
+      >
+        <div 
+          className={`${sidebarCollapsed ? 'px-2 py-3' : 'px-4 py-3'} border-b border-gray-100 cursor-move hover:bg-gray-50/50 transition-colors select-none`}
+          onMouseDown={handleMouseDown}
+          onClick={(e) => {
+            // Only toggle collapse if not dragging
+            if (!isDragging && e.detail === 1) {
+              const timeSinceMouseDown = Date.now() - (window as any).lastMouseDownTime;
+              if (timeSinceMouseDown > 200) {
+                setSidebarCollapsed(!sidebarCollapsed);
+              }
+            }
+          }}
+          onMouseDownCapture={(e) => {
+            (window as any).lastMouseDownTime = Date.now();
+          }}
+        >
+          {!sidebarCollapsed ? (
+            <div className="flex items-center justify-between">
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nearby Language Points</p>
+                {clickedCoord ? (
+                  <p className="text-sm text-gray-700 mt-1">
+                    Lat {clickedCoord.lat.toFixed(3)}, Lng {clickedCoord.lng.toFixed(3)}
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-400 mt-1">Click on map to query</p>
+                )}
+              </div>
+              <button
+                className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSidebarCollapsed(!sidebarCollapsed);
+                }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           ) : (
-            <p className="text-sm text-gray-400 mt-1">Click on map to query</p>
+            <div className="flex flex-col items-center w-full">
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider writing-vertical-rl mb-2 whitespace-nowrap">
+                Nearby
+              </p>
+              <button
+                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSidebarCollapsed(!sidebarCollapsed);
+                }}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm text-gray-800">
-          {!clickedCoord && <p className="text-gray-500">No coordinates selected yet.</p>}
-          {clickedCoord && nearestLoading && <p className="text-blue-600">Loading...</p>}
-          {clickedCoord && nearestError && (
-            <p className="text-red-500 text-sm">Query failed: {nearestError}</p>
-          )}
-          {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
-            <ul className="space-y-2">
-              {nearest!.map((location, idx) => (
-                <li
-                  key={location.id}
-                  className="border border-gray-100 rounded-lg px-3 py-2 hover:border-blue-200 transition"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-gray-900 truncate">{location.name}</span>
-                    <span className="text-xs text-gray-500">#{idx + 1}</span>
-                  </div>
-                  <div className="mt-1 text-sm text-gray-600">{formatDistance(location.distanceMeters)}</div>
-                  {location.level && (
-                    <div className="mt-0.5 text-xs text-gray-400 uppercase tracking-wide">{location.level}</div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
-            <p className="text-gray-500">No data available near this location.</p>
-          )}
-        </div>
+        {!sidebarCollapsed && (
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm text-gray-800">
+            {!clickedCoord && <p className="text-gray-500">No coordinates selected yet.</p>}
+            {clickedCoord && nearestLoading && <p className="text-blue-600">Loading...</p>}
+            {clickedCoord && nearestError && (
+              <p className="text-red-500 text-sm">Query failed: {nearestError}</p>
+            )}
+            {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
+              <ul className="space-y-2">
+                {nearest!.map((location, idx) => (
+                  <li
+                    key={location.id}
+                    className="border border-gray-100 rounded-lg px-3 py-2 hover:border-blue-200 transition"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-gray-900 truncate">{location.name}</span>
+                      <span className="text-xs text-gray-500">#{idx + 1}</span>
+                    </div>
+                    <div className="mt-1 text-sm text-gray-600">{formatDistance(location.distanceMeters)}</div>
+                    {location.level && (
+                      <div className="mt-0.5 text-xs text-gray-400 uppercase tracking-wide">{location.level}</div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
+              <p className="text-gray-500">No data available near this location.</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
