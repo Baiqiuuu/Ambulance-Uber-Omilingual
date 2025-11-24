@@ -1,70 +1,70 @@
 # Quick Setup Guide
 
-## 快速开始
+## Quick Start
 
-### 1. 安装依赖
+### 1. Install Dependencies
 
 ```bash
 pnpm install
 ```
 
-### 2. 配置环境变量
+### 2. Configure Environment Variables
 
-**创建根目录 `.env` 文件：**
+**Create root `.env` file:**
 ```env
 NEXT_PUBLIC_API_BASE=http://localhost:4000
 NEXT_PUBLIC_WS_BASE=http://localhost:4000
-NEXT_PUBLIC_MAPBOX_TOKEN=你的Mapbox token
+NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
 ```
 
-**创建 `apps/@app/server/.env` 文件：**
+**Create `apps/@app/server/.env` file:**
 ```env
 PORT=4000
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/ems
 ```
 
-### 3. 启动数据库
+### 3. Start Database Services
 
 ```bash
 pnpm db:up
 ```
 
-### 4. 启动开发服务器
+### 4. Start Development Servers
 
-**方式一：同时启动 Web 和 Server**
+**Option 1: Run web and server together**
 ```bash
 pnpm dev
 ```
 
-**方式二：分别启动**
+**Option 2: Run separately**
 ```bash
-# 终端 1
+# Terminal 1
 pnpm dev:web
 
-# 终端 2  
+# Terminal 2  
 pnpm dev:server
 
-# 终端 3 (可选)
+# Terminal 3 (optional)
 pnpm dev:electron
 ```
 
-### 5. 访问应用
+### 5. Access the Application
 
 - Web: http://localhost:3000
 - API: http://localhost:4000
-- Electron: 会自动打开桌面窗口
+- Electron: Desktop window will open automatically
 
-## 验证
+## Verification
 
-打开浏览器访问 http://localhost:3000，你应该能看到：
-- 地图显示（需要有效的 Mapbox token）
-- 每 2 秒出现/移动的 "🚑 A1" 标记（模拟实时位置）
+Open your browser and visit http://localhost:3000, you should see:
+- Map display (requires valid Mapbox token)
+- "🚑 A1" marker appearing/moving every 2 seconds (simulated real-time position)
 
-## 故障排除
+## Troubleshooting
 
-1. **端口被占用**：修改 `.env` 中的端口号
-2. **数据库连接失败**：确保 Docker 服务正在运行 (`docker ps`)
-3. **Mapbox 地图不显示**：检查 `NEXT_PUBLIC_MAPBOX_TOKEN` 是否正确设置
+1. **Port already in use**: Modify the port number in `.env` file
+2. **Database connection failed**: Ensure Docker services are running (`docker ps`)
+3. **Mapbox map not displaying**: Check if `NEXT_PUBLIC_MAPBOX_TOKEN` is correctly set
 
 
 

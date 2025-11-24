@@ -58,6 +58,8 @@ NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
 ```env
 PORT=4000
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/ems
+# Optional: Override default CSV data source
+LOCATION_CSV_PATH=/absolute/path/to/languoid.csv
 ```
 
 ### 4. Start Database Services
@@ -100,6 +102,37 @@ pnpm dev:electron
 - Unique dispatch constraint at database level
 - Monorepo structure for code sharing
 - Dockerized database services
+- CSV preloading with nearest point query (`GET /api/locations/nearest`)
+- Frontend map click to query nearby language points and display Top 5
+
+### Nearest Point API
+
+- **Endpoint**: `GET /api/locations/nearest?lat=<number>&lng=<number>&limit=<1-50>`
+- **Description**: Returns CSV records closest to the given latitude and longitude, with a maximum of 50 records.
+- **Configuration**: By default uses `languoid.csv` in the repository root, or can be overridden via `LOCATION_CSV_PATH` to point to other large CSV files.
+- **Response Example**:
+  ```json
+  {
+    "data": [
+      {
+        "id": "alpha",
+        "name": "Alpha",
+        "latitude": 1,
+        "longitude": 1,
+        "distanceMeters": 123
+      }
+    ],
+    "meta": {
+      "totalIndexed": 27000,
+      "source": "/data/languoid.csv"
+    }
+  }
+  ```
+
+### Frontend Nearest Point Interaction
+
+- Clicking anywhere on the web map interface will trigger a nearest point query, displaying the 5 closest language points (with distance) in the top-right sidebar.
+- The sidebar dynamically shows loading status and error messages, and highlights the current position and returned language points with blue markers on the map.
 
 ## Available Scripts
 

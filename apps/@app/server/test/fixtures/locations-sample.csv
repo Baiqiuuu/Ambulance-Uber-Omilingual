@@ -1,0 +1,5 @@
+id,family_id,parent_id,name,bookkeeping,level,latitude,longitude,iso639P3code,description,markup_description,child_family_count,child_language_count,child_dialect_count,country_ids
+alpha,,,Alpha,False,language,1.0,1.0,alp,,,0,0,0,US
+beta,,,Beta,False,language,1.5,1.5,bet,,,0,0,0,CA
+gamma,,,Gamma,False,language,-10.0,120.0,gam,,,0,0,0,AU
+

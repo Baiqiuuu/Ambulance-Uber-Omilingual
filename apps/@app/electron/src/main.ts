@@ -17,7 +17,7 @@ async function createWindow() {
     await win.loadURL('http://localhost:3000');
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
-    await win.loadFile(path.join(__dirname, 'index.html')); // 生产可用：将 Next 导出静态后引入
+    await win.loadFile(path.join(__dirname, 'index.html')); // For production: export Next.js as static files and include them
   }
 }
 

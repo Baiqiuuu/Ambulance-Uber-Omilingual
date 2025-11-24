@@ -7,7 +7,11 @@ import { AEDController } from './aed.controller';
 import { MedicalController } from './medical.controller';
 import { Vehicle } from './vehicle.entity';
 import { Dispatch } from './dispatch.entity';
+
+import { LocationsModule } from './locations/locations.module';
+
 import { AED } from './aed.entity';
+
 
 @Module({
   imports: [
@@ -17,18 +21,18 @@ import { AED } from './aed.entity';
     }),
     TypeOrmModule.forRootAsync({
       useFactory: () => {
-        // 优先使用 DATABASE_URL，如果存在且非空则使用
+        // Prefer DATABASE_URL if it exists and is non-empty
         const databaseUrl = process.env.DATABASE_URL?.trim();
         if (databaseUrl) {
           return {
             type: 'postgres',
             url: databaseUrl,
             autoLoadEntities: true,
-            synchronize: true, // 开发期方便；生产请改为 migration
+            synchronize: true, // Convenient for development; use migrations in production
           };
         }
         
-        // 使用单独的配置项，确保所有值都是字符串类型
+        // Use individual configuration items, ensuring all values are strings
         return {
           type: 'postgres',
           host: process.env.DB_HOST || 'localhost',
@@ -37,11 +41,16 @@ import { AED } from './aed.entity';
           password: String(process.env.DB_PASSWORD || 'postgres'),
           database: process.env.DB_DATABASE || 'ems',
           autoLoadEntities: true,
-          synchronize: true, // 开发期方便；生产请改为 migration
+          synchronize: true, // Convenient for development; use migrations in production
         };
       },
     }),
+
+    TypeOrmModule.forFeature([Vehicle, Dispatch]),
+    LocationsModule,
+
     TypeOrmModule.forFeature([Vehicle, Dispatch, AED]),
+
   ],
   controllers: [VehicleController, AEDController, MedicalController],
   providers: [TelemetryGateway],

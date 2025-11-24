@@ -25,8 +25,8 @@ export class TelemetryGateway implements OnGatewayInit {
   private intervalId: NodeJS.Timeout | null = null;
 
   afterInit() {
-    // 模拟：每2秒推一次随机车辆位置
-    this.intervalId = setInterval(() => {
+    // Simulate: push random vehicle position every 2 seconds
+    setInterval(() => {
       const id = 'A1';
       const baseLat = 39.95,
         baseLng = -75.16;
