@@ -543,6 +543,24 @@ export default function Home() {
 
   const pathsData = generatePaths();
 
+  // Calculate nearest ambulance distance
+  const nearestAmbulance = useMemo(() => {
+    if (!clickedCoord || vehicles.length === 0) return null;
+
+    let minDist = Infinity;
+    let closest = null;
+
+    vehicles.forEach(v => {
+      const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, v.lat, v.lng);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = { ...v, distance: dist };
+      }
+    });
+
+    return closest;
+  }, [clickedCoord, vehicles]);
+
   // Add 3D buildings layer helper function
   const add3DBuildings = useCallback((map: MapboxMap) => {
     // Check if 3D buildings layer already exists
@@ -609,723 +627,6 @@ export default function Home() {
   useEffect(() => {
     // DISABLED: 3D model layer - using 2D markers instead
     return;
-    /*
-    const map = mapRef.current?.getMap();
-    if (!map || !mapLoaded) return;
-
-    // Don't recreate layer if it already exists and model is loaded
-    // This prevents losing the model when vehicles update
-    if (map.getLayer('vehicles-3d-layer') && modelLoadedRef.current) {
-      // Just update the map reference
-      layerRef.current.map = map;
-      return;
-    }
-
-    // If layer exists but model not loaded, remove it to recreate
-    if (map.getLayer('vehicles-3d-layer')) {
-      map.removeLayer('vehicles-3d-layer');
-    }
-
-    const layerData = layerRef.current;
-    layerData.map = map;
-    // Only clear instances if we're recreating the layer
-    if (!modelLoadedRef.current) {
-      layerData.modelInstances = [];
-    }
-
-    // Create custom layer
-    const customLayer: CustomLayerInterface = {
-      id: 'vehicles-3d-layer',
-      type: 'custom',
-      renderingMode: '3d',
-      onAdd: function (mapInstance: MapboxMap, gl: WebGLRenderingContext) {
-        console.log('3D layer onAdd called');
-        
-        // Create Three.js scene
-        const scene = new THREE.Scene();
-        // Camera settings - use wider FOV and larger near/far planes for custom layer
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.0001, 10000);
-        
-        // Use Mapbox's WebGL context
-        const renderer = new THREE.WebGLRenderer({
-          canvas: mapInstance.getCanvas(),
-          context: gl,
-          antialias: true,
-        });
-        renderer.autoClear = false;
-        renderer.sortObjects = false;
-
-        // Save to ref
-        layerData.scene = scene;
-        layerData.camera = camera;
-        layerData.renderer = renderer;
-
-        // Load ambulance model
-        const loader = new GLTFLoader();
-        console.log('Loading ambulance model: /models/ambulance.glb');
-        loader.load(
-          '/models/ambulance.glb',
-          (gltf: any) => {
-            console.log('Ambulance model loaded successfully', gltf);
-            const model = gltf.scene;
-            if (model) {
-              // Center the model at origin
-              const box = new THREE.Box3().setFromObject(model);
-              const center = box.getCenter(new THREE.Vector3());
-              const size = box.getSize(new THREE.Vector3());
-              const maxDim = Math.max(size.x, size.y, size.z);
-              
-              // Offset model to center it
-              model.position.x = -center.x;
-              model.position.y = -center.y;
-              model.position.z = -center.z;
-              
-              // Calculate appropriate scale based on model size
-              // Target size: approximately 15-20 meters in real world
-              // Mercator coordinates: 1 unit ≈ 40075017 meters at equator
-              const targetSizeInMeters = 20; // 20 meters (ambulance length)
-              const metersPerMercatorUnit = 40075017; // at equator
-              const targetSizeInMercator = targetSizeInMeters / metersPerMercatorUnit;
-              const finalScale = targetSizeInMercator / maxDim;
-              
-              // Clamp scale to reasonable range for visibility
-              // Use much larger scale to make model more visible
-              // If maxDim is very small, use a fixed large scale
-              let clampedScale;
-              if (maxDim < 0.001) {
-                // Model is very small, use a fixed large scale
-                clampedScale = 0.01; // Large fixed scale
-                console.warn('Model is very small, using fixed large scale:', clampedScale);
-              } else {
-                clampedScale = Math.max(0.001, Math.min(0.01, finalScale));
-              }
-              
-              console.log('Model size:', size, 'Max dimension:', maxDim);
-              console.log('Model center:', center);
-              console.log('Calculated scale:', finalScale, 'Clamped scale:', clampedScale);
-              model.scale.set(clampedScale, clampedScale, clampedScale);
-              
-              // Add a test sphere at origin to verify rendering works
-              const testGeometry = new THREE.SphereGeometry(0.0003, 16, 16);
-              const testMaterial = new THREE.MeshBasicMaterial({ 
-                color: 0xff0000, 
-                transparent: true, 
-                opacity: 0.9,
-                side: THREE.DoubleSide
-              });
-              const testSphere = new THREE.Mesh(testGeometry, testMaterial);
-              testSphere.position.set(0, 0, 0);
-              scene.add(testSphere);
-              console.log('Added red test sphere at origin (0,0,0) for debugging');
-              
-              // Ensure model is visible and properly configured
-              model.traverse((child: any) => {
-                if (child.isMesh) {
-                  child.visible = true;
-                  child.castShadow = true;
-                  child.receiveShadow = true;
-                  // Ensure materials are visible
-                  if (child.material) {
-                    if (Array.isArray(child.material)) {
-                      child.material.forEach((mat: any) => {
-                        if (mat) mat.visible = true;
-                      });
-                    } else {
-                      child.material.visible = true;
-                    }
-                  }
-                }
-              });
-              
-              // Make sure the model itself is visible
-              model.visible = true;
-              
-              // Add model to scene immediately to verify it's there
-              scene.add(model);
-              console.log('✅ Model added directly to scene for testing');
-              
-              // Log model details
-              let meshCount = 0;
-              model.traverse((child: any) => {
-                if (child.isMesh) {
-                  meshCount++;
-                  console.log(`  Mesh ${meshCount}:`, {
-                    name: child.name,
-                    visible: child.visible,
-                    position: child.position,
-                    scale: child.scale,
-                    material: child.material ? (Array.isArray(child.material) ? child.material.length : 1) : 0
-                  });
-                }
-              });
-              console.log(`✅ Model has ${meshCount} meshes`);
-              
-              layerData.model = model;
-              modelLoadedRef.current = true;
-              setModelReady(true);
-              
-              console.log('✅ Model set, ready to create instances, current vehicle count:', vehiclesRef.current.length);
-              
-              // Create model instances for each vehicle
-              updateModelInstances();
-            } else {
-              console.error('Model scene is null or undefined');
-            }
-          },
-          (progress: any) => {
-            if (progress.total > 0) {
-              const percent = (progress.loaded / progress.total) * 100;
-              console.log('Model loading progress:', percent.toFixed(2) + '%');
-            }
-          },
-          (error: any) => {
-            console.error('Failed to load ambulance model:', error);
-            console.error('Error details:', {
-              message: error?.message,
-              stack: error?.stack,
-              url: '/models/ambulance.glb'
-            });
-          }
-        );
-      },
-      render: function (gl: WebGLRenderingContext, matrix: number[]) {
-        try {
-          const { scene, camera, renderer, model, modelInstances } = layerRef.current;
-          
-          // Get latest vehicles from ref to avoid closure issues
-          const currentVehicles = vehiclesRef.current;
-          
-          // The matrix from Mapbox is a 4x4 matrix that combines:
-          // - Projection matrix
-          // - Model-view matrix (transforms from Mercator to clip space)
-          // We need to use this directly for the camera
-          const transform = new THREE.Matrix4().fromArray(matrix);
-          
-          // Debug: log render call info
-          if (Math.random() < 0.01) {
-            console.log('🎨 Render called:', {
-              hasScene: !!scene,
-              hasCamera: !!camera,
-              hasRenderer: !!renderer,
-              hasModel: !!model,
-              vehiclesCount: currentVehicles.length,
-              instancesCount: modelInstances?.length || 0,
-              'scene children': scene?.children?.length || 0,
-              'map zoom': layerRef.current.map?.getZoom()
-            });
-          }
-          
-          // If no scene/camera/renderer, don't render
-          if (!scene || !camera || !renderer) {
-            return;
-          }
-          
-          // If no model, still render test geometries if they exist
-          if (!model) {
-            // Only log occasionally to avoid spam
-            if (Math.random() < 0.01) {
-              console.log('⚠️ render: model not loaded, but rendering scene anyway');
-            }
-            // Still render the scene (might have test geometries)
-            try {
-              renderer.resetState();
-              gl.enable(gl.DEPTH_TEST);
-              gl.depthFunc(gl.LEQUAL);
-              gl.enable(gl.BLEND);
-              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-              gl.depthMask(true);
-              gl.disable(gl.CULL_FACE);
-              gl.clear(gl.DEPTH_BUFFER_BIT);
-              
-              camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
-              camera.projectionMatrixInverse = camera.projectionMatrix.clone().invert();
-              
-              const map = layerRef.current.map;
-              if (map) {
-                const canvas = map.getCanvas();
-                renderer.setSize(canvas.width, canvas.height);
-                renderer.render(scene, camera);
-                map.triggerRepaint();
-              }
-            } catch (error) {
-              console.error('Error rendering scene without model:', error);
-            }
-            return;
-          }
-
-        // Ensure we have the right number of instances
-        if (currentVehicles.length !== modelInstances.length) {
-          // Clear old instances
-          modelInstances.forEach(instance => scene.remove(instance));
-          modelInstances.length = 0;
-          
-          // Create new instances
-          currentVehicles.forEach(() => {
-            const instance = model.clone();
-            instance.visible = true;
-            instance.matrixAutoUpdate = false;
-            
-            // Ensure all child meshes are visible
-            instance.traverse((child: any) => {
-              if (child.isMesh) {
-                child.visible = true;
-              }
-            });
-            
-            scene.add(instance);
-            modelInstances.push(instance);
-          });
-          console.log(`Updated model instances: ${modelInstances.length}, objects in scene: ${scene.children.length}`);
-        }
-
-        if (modelInstances.length === 0 || currentVehicles.length === 0) {
-          return;
-        }
-
-        // Always update positions, even if count hasn't changed
-        // This ensures models stay visible when positions update
-
-        const map = layerRef.current.map;
-        if (!map) {
-          console.log('render: map object does not exist');
-          return;
-        }
-
-        // Set camera projection matrix (using Mapbox-provided matrix)
-        // The matrix from Mapbox is a combined projection and model-view matrix
-        // It transforms from Mercator coordinates (relative to map center) to clip space
-        camera.projectionMatrix = transform.clone();
-        camera.projectionMatrixInverse = transform.clone().invert();
-        
-        // Add a test object at map center (0,0,0) to verify coordinate system
-        // This should appear at the center of the map view
-        if (!layerRef.current.testOriginObject) {
-          const testSize = 0.05; // Large test object
-          const testGeometry = new THREE.BoxGeometry(testSize, testSize, testSize);
-          const testMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0x0000ff, // Blue - different from vehicle test cubes
-            transparent: false,
-            side: THREE.DoubleSide
-          });
-          const testObject = new THREE.Mesh(testGeometry, testMaterial);
-          testObject.matrixAutoUpdate = false;
-          testObject.matrix.identity(); // Position at origin (0,0,0) = map center
-          testObject.visible = true;
-          testObject.frustumCulled = false;
-          scene.add(testObject);
-          layerRef.current.testOriginObject = testObject;
-          console.log('✅ Added BLUE test cube at map center (0,0,0)');
-        }
-
-        // Update position of each model instance
-        currentVehicles.forEach((vehicle, index) => {
-          if (index >= modelInstances.length) return;
-          
-          try {
-            const instance = modelInstances[index];
-            const [lng, lat] = [vehicle.lng, vehicle.lat];
-            
-            // Validate coordinates
-            if (!isFinite(lng) || !isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) {
-              console.warn(`Invalid coordinates for vehicle ${vehicle.id}:`, { lng, lat });
-              return;
-            }
-            
-            // Convert lat/lng to Mercator coordinates
-            // Height in meters: 5 meters above ground (ambulance height)
-            const heightInMeters = 5;
-            let mercator;
-            
-            try {
-              mercator = mapboxgl.MercatorCoordinate.fromLngLat([lng, lat], heightInMeters);
-            } catch (error) {
-              console.error(`Error converting coordinates for vehicle ${vehicle.id}:`, error);
-              return;
-            }
-            
-            // Mapbox custom layer uses a coordinate system where:
-            // - The origin (0,0,0) is at the map center
-            // - X points east, Y points north, Z points up
-            // - Three.js uses Y-up, so we need to transform: (x, y, z) -> (x, z, -y)
-            
-            // Get map center in Mercator coordinates
-            const mapCenter = map.getCenter();
-            const centerMercator = mapboxgl.MercatorCoordinate.fromLngLat(
-              [mapCenter.lng, mapCenter.lat],
-              heightInMeters
-            );
-            
-            // Calculate position relative to map center in Mercator space
-            const x = mercator.x - centerMercator.x;
-            const y = mercator.y - centerMercator.y;
-            const z = mercator.z - centerMercator.z;
-            
-            // Validate calculated positions
-            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) {
-              console.warn(`Invalid calculated position for vehicle ${vehicle.id}:`, { x, y, z });
-              return;
-            }
-            
-            // Transform from Mapbox coordinate system to Three.js
-            // Mapbox custom layer uses: X=east, Y=north, Z=up (relative to map center)
-            // Three.js uses: X=east, Y=up, Z=forward (typically negative Y from Mapbox)
-            // Try both directions and see which one works
-            // Based on Mapbox examples, the correct transform is:
-            const threeX = x;   // East stays east
-            const threeY = z;   // Up (Z) becomes up (Y) in Three.js  
-            const threeZ = -y;  // North (Y) becomes -Z in Three.js (south direction)
-            
-            // Alternative: try without negation if above doesn't work
-            // const threeZ = y;
-            
-            // Validate Three.js coordinates
-            if (!isFinite(threeX) || !isFinite(threeY) || !isFinite(threeZ)) {
-              console.warn(`Invalid Three.js coordinates for vehicle ${vehicle.id}:`, { threeX, threeY, threeZ });
-              return;
-            }
-            
-            // Create transformation matrix
-            // Use makeTranslation to create a translation matrix
-            const translation = new THREE.Matrix4().makeTranslation(threeX, threeY, threeZ);
-            
-            // Apply transformation to instance
-            instance.matrix.copy(translation);
-            instance.matrixAutoUpdate = false;
-            instance.visible = true;
-            
-            // Add a VERY LARGE test cube at vehicle position for debugging (for all vehicles)
-            // This will help us verify if rendering is working at all
-            if (!instance.userData.testCubeAdded) {
-              try {
-                // Create a MUCH larger, very visible test cube
-                // Scale based on zoom level to ensure visibility
-                // At low zoom levels, use much larger size
-                const zoom = map.getZoom();
-                // Use larger base size and less aggressive scaling for low zoom
-                const baseSize = zoom < 5 ? 0.1 : 0.01; // Much larger at low zoom
-                const testCubeSize = Math.max(0.01, baseSize / Math.pow(2, Math.max(0, zoom - 5)));
-                const testCubeGeometry = new THREE.BoxGeometry(testCubeSize, testCubeSize * 3, testCubeSize);
-                const testCubeMaterial = new THREE.MeshBasicMaterial({ 
-                  color: index === 0 ? 0x00ff00 : 0xff00ff, // Green for first, magenta for others
-                  transparent: false, // No transparency for maximum visibility
-                  opacity: 1.0,
-                  side: THREE.DoubleSide,
-                  depthTest: true,
-                  depthWrite: true
-                });
-                const testCube = new THREE.Mesh(testCubeGeometry, testCubeMaterial);
-                testCube.matrixAutoUpdate = false;
-                testCube.matrix.identity();
-                testCube.matrix.setPosition(new THREE.Vector3(threeX, threeY, threeZ));
-                testCube.visible = true;
-                testCube.frustumCulled = false;
-                scene.add(testCube);
-                instance.userData.testCube = testCube;
-                instance.userData.testCubeAdded = true;
-                console.log(`✅ Added VERY LARGE test cube ${index} at vehicle position:`, { 
-                  vehicleId: vehicle.id,
-                  lng, 
-                  lat,
-                  threeX: threeX.toFixed(8), 
-                  threeY: threeY.toFixed(8), 
-                  threeZ: threeZ.toFixed(8),
-                  'map zoom': zoom,
-                  'cube size': testCubeSize,
-                  'scene children count': scene.children.length
-                });
-              } catch (error) {
-                console.error(`Error creating test cube for vehicle ${vehicle.id}:`, error);
-              }
-            } else {
-              // Update test cube position every frame
-              const testCube = instance.userData.testCube;
-              if (testCube) {
-                try {
-                  testCube.matrix.identity();
-                  testCube.matrix.setPosition(new THREE.Vector3(threeX, threeY, threeZ));
-                  testCube.visible = true;
-                } catch (error) {
-                  console.error(`Error updating test cube for vehicle ${vehicle.id}:`, error);
-                }
-              }
-            }
-            
-            // Also add a test sphere at the same position for extra visibility
-            if (!instance.userData.testSphereAdded) {
-              try {
-                const zoom = map.getZoom();
-                const testSphereSize = Math.max(0.0008, 0.008 / Math.pow(2, Math.max(0, zoom - 10)));
-                const testSphereGeometry = new THREE.SphereGeometry(testSphereSize, 16, 16);
-                const testSphereMaterial = new THREE.MeshBasicMaterial({ 
-                  color: 0xffff00, // Yellow
-                  transparent: false,
-                  side: THREE.DoubleSide
-                });
-                const testSphere = new THREE.Mesh(testSphereGeometry, testSphereMaterial);
-                testSphere.matrixAutoUpdate = false;
-                testSphere.matrix.identity();
-                testSphere.matrix.setPosition(new THREE.Vector3(threeX, threeY + testSphereSize * 2, threeZ));
-                testSphere.visible = true;
-                testSphere.frustumCulled = false;
-                scene.add(testSphere);
-                instance.userData.testSphere = testSphere;
-                instance.userData.testSphereAdded = true;
-                console.log(`✅ Added yellow test sphere above vehicle ${index}`);
-              } catch (error) {
-                console.error(`Error creating test sphere for vehicle ${vehicle.id}:`, error);
-              }
-            } else {
-              const testSphere = instance.userData.testSphere;
-              if (testSphere) {
-                try {
-                  const zoom = map.getZoom();
-                  const testSphereSize = Math.max(0.0008, 0.008 / Math.pow(2, Math.max(0, zoom - 10)));
-                  testSphere.matrix.identity();
-                  testSphere.matrix.setPosition(new THREE.Vector3(threeX, threeY + testSphereSize * 2, threeZ));
-                  testSphere.visible = true;
-                } catch (error) {
-                  console.error(`Error updating test sphere for vehicle ${vehicle.id}:`, error);
-                }
-              }
-            }
-            
-            // Ensure instance and all children are visible
-            instance.traverse((child: any) => {
-              if (child.isMesh) {
-                child.visible = true;
-              }
-            });
-            
-            // Debug info (print for first vehicle - always log first time, then occasionally)
-            if (index === 0) {
-              const shouldLog = !instance.userData.positionLogged || Math.random() < 0.1;
-              if (shouldLog) {
-                const distance = Math.sqrt(threeX*threeX + threeY*threeY + threeZ*threeZ);
-                console.log('📍 Vehicle position debug:', {
-                  vehicleId: vehicle.id,
-                  'geo coords': { lng, lat },
-                  heightInMeters,
-                  'mercator (absolute)': { 
-                    x: mercator.x.toFixed(10), 
-                    y: mercator.y.toFixed(10), 
-                    z: mercator.z.toFixed(10) 
-                  },
-                  'center mercator': {
-                    x: centerMercator.x.toFixed(10),
-                    y: centerMercator.y.toFixed(10),
-                    z: centerMercator.z.toFixed(10)
-                  },
-                  'relative (mercator)': { 
-                    x: x.toFixed(10), 
-                    y: y.toFixed(10), 
-                    z: z.toFixed(10),
-                    'magnitude': Math.sqrt(x*x + y*y + z*z).toFixed(10)
-                  },
-                  'three.js position': { 
-                    x: threeX.toFixed(10), 
-                    y: threeY.toFixed(10), 
-                    z: threeZ.toFixed(10),
-                    'magnitude': distance.toFixed(10)
-                  },
-                  'map center': { lng: map.getCenter().lng, lat: map.getCenter().lat },
-                  'map zoom': map.getZoom(),
-                  'instance visible': instance.visible,
-                  'WARNING': distance > 1 ? '⚠️ Position is very far from origin! May be outside view.' : 'OK'
-                });
-                instance.userData.positionLogged = true;
-              }
-            }
-          } catch (error) {
-            console.error(`Error updating vehicle ${vehicle.id}:`, error);
-          }
-        });
-
-          // Render scene
-          try {
-            renderer.resetState();
-            // Set WebGL state to ensure models render above map
-            gl.enable(gl.DEPTH_TEST);
-            gl.depthFunc(gl.LEQUAL);
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-            gl.depthMask(true);
-            gl.disable(gl.CULL_FACE); // Disable culling to see models from all angles
-            
-            // Clear depth buffer to ensure models render on top
-            gl.clear(gl.DEPTH_BUFFER_BIT);
-            
-            // Set renderer size to match canvas
-            const canvas = map.getCanvas();
-            if (canvas) {
-              renderer.setSize(canvas.width, canvas.height);
-              
-              // Debug: log scene info and object positions
-              if (Math.random() < 0.1) {
-                const sceneObjects = scene.children.map((child: any, idx: number) => {
-                  const pos = child.position || { x: 0, y: 0, z: 0 };
-                  const matrixPos = new THREE.Vector3();
-                  if (child.matrix) {
-                    child.matrix.decompose(matrixPos, new THREE.Quaternion(), new THREE.Vector3());
-                  }
-                  return {
-                    index: idx,
-                    type: child.type,
-                    name: child.name || 'unnamed',
-                    visible: child.visible,
-                    position: { x: pos.x?.toFixed(6), y: pos.y?.toFixed(6), z: pos.z?.toFixed(6) },
-                    matrixPos: { x: matrixPos.x.toFixed(6), y: matrixPos.y.toFixed(6), z: matrixPos.z.toFixed(6) }
-                  };
-                });
-                console.log('🎨 Rendering scene:', {
-                  'scene children': scene.children.length,
-                  'model instances': modelInstances.length,
-                  'vehicles': currentVehicles.length,
-                  'canvas size': `${canvas.width}x${canvas.height}`,
-                  'objects': sceneObjects
-                });
-              }
-              
-              renderer.render(scene, camera);
-              
-              // Force repaint
-              map.triggerRepaint();
-            }
-          } catch (renderError) {
-            console.error('Error during render:', renderError);
-          }
-        } catch (error) {
-          console.error('Error in render function:', error);
-        }
-      },
-    };
-
-    function updateModelInstances() {
-      const { scene, model, modelInstances } = layerRef.current;
-      if (!scene || !model) {
-        console.warn('Cannot update model instances: scene or model not available', { scene: !!scene, model: !!model });
-        return;
-      }
-      
-      // Get latest vehicles from ref
-      const currentVehicles = vehiclesRef.current;
-      
-      console.log(`Updating model instances: ${currentVehicles.length} vehicles, ${modelInstances.length} existing instances`);
-      
-      // Clear old instances
-      modelInstances.forEach(instance => {
-        scene.remove(instance);
-        // Dispose of cloned geometry and materials to prevent memory leaks
-        instance.traverse((child: any) => {
-          if (child.isMesh) {
-            if (child.geometry) child.geometry.dispose();
-            if (child.material) {
-              if (Array.isArray(child.material)) {
-                child.material.forEach((mat: any) => mat?.dispose());
-              } else {
-                child.material.dispose();
-              }
-            }
-          }
-        });
-      });
-      modelInstances.length = 0;
-
-      // Create new instances
-      currentVehicles.forEach((vehicle, index) => {
-        const instance = model.clone();
-        instance.visible = true;
-        instance.matrixAutoUpdate = false;
-        instance.userData = { vehicleId: vehicle.id, logged: false };
-        
-        // Ensure all child meshes are visible and properly configured
-        instance.traverse((child: any) => {
-          if (child.isMesh) {
-            child.visible = true;
-            child.frustumCulled = false; // Disable frustum culling to ensure visibility
-            // Ensure materials are visible
-            if (child.material) {
-              if (Array.isArray(child.material)) {
-                child.material.forEach((mat: any) => {
-                  if (mat) {
-                    mat.visible = true;
-                    mat.needsUpdate = true;
-                    // Make materials more visible
-                    if (mat.emissive) {
-                      mat.emissive.multiplyScalar(1.2);
-                    }
-                  }
-                });
-              } else {
-                child.material.visible = true;
-                child.material.needsUpdate = true;
-                // Make materials more visible
-                if (child.material.emissive) {
-                  child.material.emissive.multiplyScalar(1.2);
-                }
-              }
-            }
-          }
-        });
-        
-        scene.add(instance);
-        modelInstances.push(instance);
-        
-        console.log(`Created instance ${index} for vehicle ${vehicle.id}`);
-      });
-      
-      console.log(`Created ${modelInstances.length} model instances, scene now has ${scene.children.length} objects`);
-    }
-
-    // Wait for map style to load before adding layer
-    const addLayerWhenReady = () => {
-      if (map.isStyleLoaded() && !map.getLayer('vehicles-3d-layer')) {
-        console.log('Adding 3D model layer to map');
-        try {
-          // Try to add layer at the top (after all other layers)
-          const layers = map.getStyle().layers;
-          if (layers && layers.length > 0) {
-            // Find the last layer ID to insert after it
-            const lastLayerId = layers[layers.length - 1].id;
-            map.addLayer(customLayer, lastLayerId);
-            console.log('3D model layer added after:', lastLayerId);
-          } else {
-            map.addLayer(customLayer);
-            console.log('3D model layer added (no existing layers)');
-          }
-        } catch (error) {
-          console.error('Error adding 3D layer:', error);
-          // Fallback: try adding without beforeId
-          try {
-            map.addLayer(customLayer);
-            console.log('3D model layer added (fallback)');
-          } catch (fallbackError) {
-            console.error('Failed to add 3D layer even with fallback:', fallbackError);
-          }
-        }
-      }
-    };
-
-    if (map.isStyleLoaded()) {
-      addLayerWhenReady();
-    } else {
-      map.once('style.load', addLayerWhenReady);
-    }
-    
-    // Also listen for style changes to re-add layer if needed
-    const handleStyleChange = () => {
-      if (!map.getLayer('vehicles-3d-layer') && modelLoadedRef.current) {
-        console.log('Style changed, re-adding 3D layer');
-        setTimeout(addLayerWhenReady, 100);
-      }
-    };
-    map.on('style.load', handleStyleChange);
-
-    // Cleanup function - only remove layer if component unmounts
-    return () => {
-      // Don't remove layer on every update, only on unmount
-      // This prevents losing the model when vehicles update
-    };
-    */
   }, [mapLoaded, mapStyle]); // Remove vehicles from dependencies to prevent layer recreation
 
   const handleMapLoad = useCallback(() => {
@@ -1398,7 +699,7 @@ export default function Home() {
     if (value >= 1000) {
       return `${(value / 1000).toFixed(1)} km`;
     }
-    return `${value} m`;
+    return `${value.toFixed(0)} m`;
   }, []);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1558,16 +859,11 @@ export default function Home() {
           <h2 className="text-xl font-bold text-red-600 mb-4">Mapbox Token Missing</h2>
           <p className="text-gray-700 mb-4">
             Please create a <code className="bg-gray-100 px-2 py-1 rounded text-sm">.env</code> file in the project root directory and set <code className="bg-gray-100 px-2 py-1 rounded text-sm">NEXT_PUBLIC_MAPBOX_TOKEN</code>.
-            Please create a <code className="bg-gray-100 px-2 py-1 rounded text-sm">.env</code> file in the project root and set <code className="bg-gray-100 px-2 py-1 rounded text-sm">NEXT_PUBLIC_MAPBOX_TOKEN</code>.
           </p>
           <div className="space-y-2 text-sm text-gray-600">
             <p><strong>Steps:</strong></p>
             <ol className="list-decimal list-inside space-y-1 ml-2">
               <li>Copy <code className="bg-gray-100 px-1 rounded">.env.example</code> file to <code className="bg-gray-100 px-1 rounded">.env</code></li>
-              <li>Visit <a href="https://account.mapbox.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Mapbox account page</a></li>
-              <li>Login or register an account</li>
-              <li>Get your token from the "Access tokens" section</li>
-              <li>Copy <code className="bg-gray-100 px-1 rounded">.env.example</code> file as <code className="bg-gray-100 px-1 rounded">.env</code></li>
               <li>Visit <a href="https://account.mapbox.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Mapbox account page</a></li>
               <li>Login or register an account</li>
               <li>Get your token in the "Access tokens" section</li>
@@ -1636,13 +932,22 @@ export default function Home() {
         {/* Show all vehicles in both modes */}
         {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
             <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
-              <div className={`text-white text-xs px-2 py-1 rounded shadow-lg border-2 border-white ${
-                v.status === 'on_duty' ? 'bg-red-600' : 'bg-gray-500'
-              }`}>
-                🚑 {v.name || v.id.slice(0, 8)}
+              <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
+                <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${
+                  v.status === 'on_duty' 
+                    ? 'bg-rose-500 shadow-rose-500/40' 
+                    : 'bg-slate-500 shadow-slate-500/40'
+                }`}>
+                  <span className="text-sm filter drop-shadow-sm">🚑</span>
+                  <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
+                </div>
                 {v.status && (
-                  <div className="text-[10px] mt-0.5">
-                    {v.status === 'on_duty' ? 'ON DUTY' : 'VACANT'}
+                  <div className={`absolute -bottom-6 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shadow-sm border border-white/20 opacity-0 group-hover:opacity-100 transition-all transform translate-y-1 group-hover:translate-y-0 ${
+                     v.status === 'on_duty' 
+                     ? 'bg-rose-600 text-white' 
+                     : 'bg-slate-600 text-white'
+                  }`}>
+                    {v.status === 'on_duty' ? 'BUSY' : 'VACANT'}
                   </div>
                 )}
               </div>
@@ -1652,60 +957,66 @@ export default function Home() {
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
           <Marker key={coord.id} longitude={coord.lng} latitude={coord.lat}>
-            <div className="text-3xl">🏠</div>
+            <div className="text-3xl filter drop-shadow-md hover:scale-110 transition-transform cursor-pointer">🏠</div>
           </Marker>
         ))}
 
         {/* AED markers */}
         {showAEDs && aeds.map(aed => (
           <Marker key={aed.id} longitude={aed.longitude} latitude={aed.latitude}>
-            <div className="relative group">
-              <div className="bg-red-600 w-8 h-8 rounded-full border-2 border-white shadow-lg flex items-center justify-center cursor-pointer hover:scale-110 transition-transform">
-                <span className="text-white text-sm font-bold">AED</span>
+            <div className="relative group cursor-pointer">
+              <div className="bg-rose-500 w-9 h-9 rounded-full border-2 border-white shadow-xl shadow-rose-500/30 flex items-center justify-center hover:scale-110 hover:bg-rose-600 transition-all duration-300 z-10 relative">
+                <span className="text-white text-[10px] font-bold">AED</span>
               </div>
+              {/* Pulse effect */}
+              <div className="absolute inset-0 rounded-full bg-rose-400 opacity-0 group-hover:animate-ping"></div>
+              
               {/* Tooltip on hover */}
-              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-48 bg-white rounded-lg shadow-xl p-3 border border-gray-200 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                <div className="text-sm font-semibold text-gray-800 mb-1">{aed.name}</div>
+              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 w-56 bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl shadow-slate-900/10 p-4 border border-white/60 opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none z-20 scale-95 group-hover:scale-100 origin-bottom">
+                <div className="text-sm font-bold text-slate-800 mb-1">{aed.name}</div>
                 {aed.address && (
-                  <div className="text-xs text-gray-600 mb-1">📍 {aed.address}</div>
+                  <div className="text-xs text-slate-500 mb-2 flex items-start gap-1">
+                    <span className="mt-0.5">📍</span> 
+                    <span className="leading-tight">{aed.address}</span>
+                  </div>
                 )}
-                {aed.building && (
-                  <div className="text-xs text-gray-600 mb-1">🏢 {aed.building}</div>
-                )}
-                {aed.floor && (
-                  <div className="text-xs text-gray-600 mb-1">🪜 Floor: {aed.floor}</div>
-                )}
-                {aed.description && (
-                  <div className="text-xs text-gray-500 mt-1">{aed.description}</div>
-                )}
-                <div className="text-xs text-gray-500 mt-1">
-                  Access: {aed.accessType} | Status: {aed.status}
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {aed.floor && (
+                    <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">FL {aed.floor}</span>
+                  )}
+                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded-full">{aed.accessType}</span>
                 </div>
-                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
+                <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-8 border-r-8 border-t-8 border-transparent border-t-white/95"></div>
               </div>
             </div>
           </Marker>
         ))}
         {clickedCoord && (
           <Marker longitude={clickedCoord.lng} latitude={clickedCoord.lat}>
-            <div className="w-3 h-3 rounded-full bg-blue-500 border border-white shadow-md" />
+            <div className="relative">
+              <div className="w-4 h-4 rounded-full bg-indigo-500 border-2 border-white shadow-lg z-10 relative"></div>
+              <div className="absolute inset-0 rounded-full bg-indigo-400 animate-ping opacity-75 h-full w-full"></div>
+            </div>
           </Marker>
         )}
         {hasNearestData &&
           nearest!.map(location => (
             <Marker key={location.id} longitude={location.longitude} latitude={location.latitude}>
-              <div className="bg-blue-600/80 text-white text-[10px] px-1 rounded">{location.name}</div>
+              <div className="bg-white/90 backdrop-blur-sm border border-indigo-100 text-indigo-600 text-[10px] font-bold px-2 py-1 rounded-full shadow-sm hover:scale-105 transition-transform cursor-pointer">
+                {location.name}
+              </div>
             </Marker>
           ))}
         {/* Shared location marker with message */}
         {sharedLocation && (
           <Marker longitude={sharedLocation.lng} latitude={sharedLocation.lat}>
-            <div className="relative">
-              <div className="bg-red-500 w-4 h-4 rounded-full border-2 border-white shadow-lg"></div>
+            <div className="relative group">
+              <div className="bg-rose-500 w-5 h-5 rounded-full border-2 border-white shadow-lg shadow-rose-500/40 animate-bounce"></div>
+              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-1 bg-black/20 blur-sm rounded-full"></div>
               {sharedLocation.message && (
-                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-48 bg-white rounded-lg shadow-xl p-3 border border-gray-200">
-                  <div className="text-sm text-gray-800 whitespace-pre-wrap break-words">
-                    {sharedLocation.message}
+                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 w-48 bg-white rounded-2xl shadow-xl p-3 border border-slate-100">
+                  <div className="text-sm text-slate-700 font-medium whitespace-pre-wrap break-words text-center">
+                    "{sharedLocation.message}"
                   </div>
                   <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
                 </div>
@@ -1714,22 +1025,22 @@ export default function Home() {
           </Marker>
         )}
       </MapGL>
-      <div className="absolute left-4 bottom-4 bg-white/90 backdrop-blur-sm rounded-md shadow-lg px-3 py-2 text-xs text-gray-800 pointer-events-none">
-        <div className="text-[0.65rem] uppercase tracking-wide text-gray-500 mb-1 font-semibold">Clicked Coordinates</div>
-        <div>Lat: {clickedCoord ? clickedCoord.lat.toFixed(5) : '--.--'}</div>
-        <div>Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
+      <div className="absolute left-4 bottom-8 bg-white/80 backdrop-blur-md rounded-2xl shadow-2xl shadow-indigo-500/10 px-4 py-3 text-xs text-slate-700 pointer-events-none border border-white/50">
+        <div className="text-[0.65rem] uppercase tracking-wider text-indigo-500 mb-1 font-bold">Selected Location</div>
+        <div className="font-mono">Lat: {clickedCoord ? clickedCoord.lat.toFixed(5) : '--.--'}</div>
+        <div className="font-mono">Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
       </div>
       <div 
         ref={sidebarRef}
-        className={`absolute ${sidebarCollapsed ? 'w-12' : 'w-64'} max-h-[70vh] overflow-hidden flex flex-col bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-100 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-300'} ${!sidebarPosition ? 'left-1/2 -translate-x-1/2' : ''}`}
+        className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-6 top-6' : ''}`}
         style={{
           left: sidebarPosition ? sidebarPosition.x : undefined,
-          top: sidebarPosition ? sidebarPosition.y : 16,
+          top: sidebarPosition ? sidebarPosition.y : undefined,
           right: sidebarPosition ? 'auto' : undefined,
         }}
       >
         <div 
-          className={`${sidebarCollapsed ? 'px-2 py-3' : 'px-4 py-3'} border-b border-gray-100 cursor-move hover:bg-gray-50/50 transition-colors select-none`}
+          className={`${sidebarCollapsed ? 'px-0 py-4' : 'px-5 py-4'} border-b border-slate-100 cursor-move hover:bg-slate-50/50 transition-colors select-none`}
           onMouseDown={handleMouseDown}
           onClick={(e) => {
             // Only toggle collapse if not dragging
@@ -1747,74 +1058,111 @@ export default function Home() {
           {!sidebarCollapsed ? (
             <div className="flex items-center justify-between">
               <div className="flex-1">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nearby Language Points</p>
+                <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider">Nearby Points</p>
                 {clickedCoord ? (
-                  <p className="text-sm text-gray-700 mt-1">
-                    Lat {clickedCoord.lat.toFixed(3)}, Lng {clickedCoord.lng.toFixed(3)}
+                  <p className="text-sm text-slate-700 mt-1 font-medium">
+                    {clickedCoord.lat.toFixed(3)}, {clickedCoord.lng.toFixed(3)}
                   </p>
                 ) : (
-                  <p className="text-sm text-gray-400 mt-1">Click on map to query</p>
+                  <p className="text-sm text-slate-400 mt-1">Select location</p>
                 )}
               </div>
               <button
-                className="ml-2 p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                className="ml-2 p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
                 onClick={(e) => {
                   e.stopPropagation();
                   setSidebarCollapsed(!sidebarCollapsed);
                 }}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
           ) : (
-            <div className="flex flex-col items-center w-full">
-              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider writing-vertical-rl mb-2 whitespace-nowrap">
-                Nearby
-              </p>
+            <div className="flex flex-col items-center w-full gap-2">
               <button
-                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
                 onClick={(e) => {
                   e.stopPropagation();
                   setSidebarCollapsed(!sidebarCollapsed);
                 }}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
               </button>
             </div>
           )}
         </div>
         {!sidebarCollapsed && (
-          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm text-gray-800">
-            {!clickedCoord && <p className="text-gray-500">No coordinates selected yet.</p>}
-            {clickedCoord && nearestLoading && <p className="text-blue-600">Loading...</p>}
-            {clickedCoord && nearestError && (
-              <p className="text-red-500 text-sm">Query failed: {nearestError}</p>
+          <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2 text-sm scrollbar-thin scrollbar-thumb-indigo-100 scrollbar-track-transparent">
+            {!clickedCoord && (
+              <div className="flex flex-col items-center justify-center py-8 text-slate-400 gap-2">
+                <span className="text-2xl">🗺️</span>
+                <p>Click map to explore</p>
+              </div>
             )}
+            {clickedCoord && nearestLoading && (
+              <div className="flex items-center justify-center py-8 text-indigo-500">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-current"></div>
+              </div>
+            )}
+            {clickedCoord && nearestError && (
+              <p className="text-rose-500 text-sm p-4 bg-rose-50 rounded-xl">Query failed: {nearestError}</p>
+            )}
+            
+            {/* Nearest Ambulance Info */}
+            {clickedCoord && nearestAmbulance && (
+              <div className="mb-3 bg-indigo-50 rounded-2xl p-3 border border-indigo-100 animate-in slide-in-from-bottom-2 duration-500">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-lg shadow-sm">
+                      🚑
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Nearest Unit</p>
+                      <p className="text-xs font-bold text-indigo-900">{nearestAmbulance.name || nearestAmbulance.id.slice(0, 8)}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-indigo-600 leading-none">{formatDistance(nearestAmbulance.distance)}</p>
+                    <p className="text-[10px] font-medium text-indigo-400">away</p>
+                  </div>
+                </div>
+                <div className="w-full bg-indigo-200 h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-indigo-500 rounded-full" 
+                    style={{ width: `${Math.max(5, 100 - Math.min(100, (nearestAmbulance.distance / 5000) * 100))}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
             {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
-              <ul className="space-y-2">
+              <ul className="space-y-2 p-2">
                 {nearest!.map((location, idx) => (
                   <li
                     key={location.id}
-                    className="border border-gray-100 rounded-lg px-3 py-2 hover:border-blue-200 transition"
+                    className="group relative bg-white border border-slate-100 rounded-xl px-4 py-3 hover:shadow-lg hover:shadow-indigo-500/10 hover:border-indigo-100 transition-all duration-300 cursor-pointer"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-gray-900 truncate">{location.name}</span>
-                      <span className="text-xs text-gray-500">#{idx + 1}</span>
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-slate-800 truncate pr-2">{location.name}</span>
+                      <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded-md">#{idx + 1}</span>
                     </div>
-                    <div className="mt-1 text-sm text-gray-600">{formatDistance(location.distanceMeters)}</div>
-                    {location.level && (
-                      <div className="mt-0.5 text-xs text-gray-400 uppercase tracking-wide">{location.level}</div>
-                    )}
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-medium text-indigo-500">{formatDistance(location.distanceMeters)}</div>
+                      {location.level && (
+                        <div className="text-[10px] text-slate-400 uppercase tracking-wider font-medium bg-slate-50 px-2 py-0.5 rounded-full">{location.level}</div>
+                      )}
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
             {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
-              <p className="text-gray-500">No data available near this location.</p>
+              <p className="text-slate-500 text-center py-8">No data available nearby.</p>
             )}
           </div>
         )}
@@ -1844,10 +1192,10 @@ export default function Home() {
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
         <button
           onClick={() => setViewMode(viewMode === 'user' ? 'medical' : 'user')}
-          className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
             viewMode === 'medical'
-              ? 'bg-blue-600 text-white hover:bg-blue-700'
-              : 'bg-gray-600 text-white hover:bg-gray-700'
+              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
+              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
           }`}
         >
           {viewMode === 'medical' ? '🏥 Medical Mode' : '👤 User Mode'}
@@ -1855,10 +1203,10 @@ export default function Home() {
         {viewMode === 'user' && (
           <button
             onClick={toggleVehicleLock}
-            className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
               isPositionLocked
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-yellow-500 text-white hover:bg-yellow-600'
+                ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+                : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
             }`}
           >
             {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
@@ -1870,20 +1218,20 @@ export default function Home() {
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
         <button
           onClick={() => handleMapStyleChange('street')}
-          className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
             mapStyle === 'street'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-50'
+              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
+              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
           }`}
         >
           🗺️ Street Map
         </button>
         <button
           onClick={() => handleMapStyleChange('satellite')}
-          className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
             mapStyle === 'satellite'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-gray-700 hover:bg-gray-50'
+              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
+              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
           }`}
         >
           🛰️ Satellite Map
@@ -1891,17 +1239,17 @@ export default function Home() {
         {viewMode === 'user' && (
           <button
             onClick={() => setShowSharePanel(!showSharePanel)}
-            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-green-600 text-white hover:bg-green-700"
+            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/30"
           >
             📍 Share Location
           </button>
         )}
         <button
           onClick={() => setShowAEDs(!showAEDs)}
-          className={`px-4 py-2 rounded-lg shadow-lg font-medium transition-all ${
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
             showAEDs
-              ? 'bg-red-600 text-white hover:bg-red-700'
-              : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
+              ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+              : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
           }`}
         >
           {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
@@ -1909,110 +1257,121 @@ export default function Home() {
       </div>
 
       {/* Bottom right buttons - different for each mode */}
-      <div className="absolute bottom-4 right-4 z-10 flex flex-col gap-2">
+      <div className="absolute bottom-8 right-4 z-10 flex flex-col gap-3">
         {viewMode === 'user' ? (
           <button
             onClick={() => setShowAddCoordinatePanel(!showAddCoordinatePanel)}
-            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-purple-600 text-white hover:bg-purple-700"
+            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-violet-600 text-white hover:bg-violet-700 shadow-violet-500/30 flex items-center justify-center gap-2"
           >
-            ➕ Add New Coordinate
+            <span>➕</span> Add New Coordinate
           </button>
         ) : (
           <button
             onClick={() => setShowMedicalPanel(!showMedicalPanel)}
-            className="px-4 py-2 rounded-lg shadow-lg font-medium transition-all bg-blue-600 text-white hover:bg-blue-700"
+            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30 flex items-center justify-center gap-2"
           >
-            🏥 Medical Panel
+            <span>🏥</span> Medical Panel
           </button>
         )}
       </div>
 
       {/* Location share panel */}
       {showSharePanel && (
-        <div className="absolute top-20 right-4 z-10 bg-white rounded-lg shadow-xl p-4 w-80">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-gray-800">Share Location</h3>
+        <div className="absolute top-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <span className="text-emerald-500">📍</span> Share Location
+            </h3>
             <button
               onClick={() => setShowSharePanel(false)}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-all"
             >
               ✕
             </button>
           </div>
           
-          <div className="space-y-3">
+          <div className="space-y-4">
             <button
               onClick={getCurrentLocation}
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              className="w-full px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
             >
-              📱 Get Current Location
+              <span>📱</span> Get Current Location
             </button>
             
-            <div className="border-t pt-3">
-              <p className="text-sm text-gray-600 mb-2">Or enter coordinates manually:</p>
-              <div className="space-y-2">
-                <div>
-                  <label className="block text-sm text-gray-700 mb-1">Latitude (Lat)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={shareLat}
-                    onChange={(e) => setShareLat(e.target.value)}
-                    placeholder="e.g., 39.95"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-700 mb-1">Longitude (Lng)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={shareLng}
-                    onChange={(e) => setShareLng(e.target.value)}
-                    placeholder="e.g., -75.16"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-700 mb-1">Note (Optional)</label>
-                  <textarea
-                    value={shareMessage}
-                    onChange={(e) => setShareMessage(e.target.value)}
-                    placeholder="Enter a message..."
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                  />
-                </div>
-                <button
-                  onClick={handleManualShare}
-                  className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-                >
-                  Share Location
-                </button>
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-slate-200"></div>
+              </div>
+              <div className="relative flex justify-center">
+                <span className="px-3 bg-white text-xs font-medium text-slate-400 uppercase tracking-wider">Or Manual</span>
               </div>
             </div>
 
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Latitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={shareLat}
+                  onChange={(e) => setShareLat(e.target.value)}
+                  placeholder="e.g., 39.95"
+                  className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Longitude</label>
+                <input
+                  type="number"
+                  step="any"
+                  value={shareLng}
+                  onChange={(e) => setShareLng(e.target.value)}
+                  placeholder="e.g., -75.16"
+                  className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Note (Optional)</label>
+                <textarea
+                  value={shareMessage}
+                  onChange={(e) => setShareMessage(e.target.value)}
+                  placeholder="Add a message..."
+                  rows={3}
+                  className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none"
+                />
+              </div>
+              <button
+                onClick={handleManualShare}
+                className="w-full px-4 py-3 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
+              >
+                Share Location
+              </button>
+            </div>
+
             {mapLoaded && vehicles.length > 0 && (
-              <div className="border-t pt-3">
-                <p className="text-sm text-gray-600 mb-2">Generate share link:</p>
+              <div className="pt-4 border-t border-slate-100">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Active Share Links</p>
                 {vehicles.map(v => {
                   const shareLink = generateShareLink(v.lat, v.lng);
                   return (
-                    <div key={v.id} className="mb-2">
-                      <p className="text-xs text-gray-500 mb-1">Vehicle {v.id}:</p>
+                    <div key={v.id} className="mb-3 bg-slate-50 p-3 rounded-2xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-slate-700">Vehicle {v.id}</span>
+                        <span className="text-xs font-mono text-slate-400 bg-slate-200 px-2 py-0.5 rounded-full">LINK</span>
+                      </div>
                       <div className="flex gap-2">
                         <input
                           type="text"
                           value={shareLink}
                           readOnly
-                          className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-gray-50"
+                          className="flex-1 px-3 py-1.5 text-xs bg-white border-0 rounded-xl text-slate-500 truncate"
                         />
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(shareLink);
                             alert('Link copied to clipboard!');
                           }}
-                          className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs hover:bg-gray-300"
+                          className="px-3 py-1.5 bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-200 transition-colors"
                         >
                           Copy
                         </button>
@@ -2028,43 +1387,45 @@ export default function Home() {
 
       {/* Add Coordinate panel */}
       {showAddCoordinatePanel && (
-        <div className="absolute bottom-20 right-4 z-10 bg-white rounded-lg shadow-xl p-4 w-80">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-gray-800">Add New Coordinate</h3>
+        <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-violet-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <span className="text-violet-500">➕</span> New Point
+            </h3>
             <button
               onClick={() => setShowAddCoordinatePanel(false)}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-all"
             >
               ✕
             </button>
           </div>
           
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Latitude (Lat)</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Latitude</label>
               <input
                 type="number"
                 step="any"
                 value={newCoordLat}
                 onChange={(e) => setNewCoordLat(e.target.value)}
                 placeholder="e.g., 39.95"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-violet-500 focus:bg-white transition-all"
               />
             </div>
             <div>
-              <label className="block text-sm text-gray-700 mb-1">Longitude (Lng)</label>
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Longitude</label>
               <input
                 type="number"
                 step="any"
                 value={newCoordLng}
                 onChange={(e) => setNewCoordLng(e.target.value)}
                 placeholder="e.g., -75.16"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-violet-500 focus:bg-white transition-all"
               />
             </div>
             <button
               onClick={handleAddCoordinate}
-              className="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+              className="w-full px-4 py-3 bg-violet-600 text-white rounded-2xl font-bold shadow-lg shadow-violet-500/20 hover:bg-violet-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
             >
               Add Coordinate
             </button>
@@ -2074,73 +1435,84 @@ export default function Home() {
 
       {/* Medical Panel */}
       {showMedicalPanel && viewMode === 'medical' && (
-        <div className="absolute bottom-20 right-4 z-10 bg-white rounded-lg shadow-xl p-4 w-96 max-h-[80vh] overflow-y-auto">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-gray-800">Medical Institution Panel</h3>
+        <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-96 max-h-[80vh] overflow-y-auto border border-white/60 animate-in slide-in-from-bottom-4 duration-300 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+          <div className="flex justify-between items-center mb-6 sticky top-0 bg-white/95 backdrop-blur-xl pb-2 z-20">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <span className="text-indigo-500">🏥</span> Institution Panel
+            </h3>
             <button
               onClick={() => setShowMedicalPanel(false)}
-              className="text-gray-500 hover:text-gray-700"
+              className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-all"
             >
               ✕
             </button>
           </div>
 
-          <div className="space-y-4">
+          <div className="space-y-6">
             {/* Register new ambulance */}
-            <div className="border-b pb-4">
-              <h4 className="font-semibold text-gray-700 mb-2">Register Ambulance</h4>
+            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+              <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">Quick Actions</h4>
               <button
                 onClick={registerAmbulance}
-                className="w-full px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                className="w-full px-4 py-3 bg-white text-indigo-600 rounded-xl font-bold shadow-sm border border-indigo-100 hover:bg-indigo-50 hover:border-indigo-200 transition-all flex items-center justify-center gap-2"
               >
-                📍 Register Using Current Location
+                <span>📍</span> Register At Current Location
               </button>
             </div>
 
             {/* Vehicle list */}
             <div>
-              <h4 className="font-semibold text-gray-700 mb-2">
-                Your Ambulances ({medicalVehicles.length})
-              </h4>
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  Fleet Status
+                </h4>
+                <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-1 rounded-full">
+                  {medicalVehicles.length} UNITS
+                </span>
+              </div>
+              
               {medicalVehicles.length === 0 ? (
-                <p className="text-sm text-gray-500">No ambulances registered yet.</p>
+                <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
+                  <span className="text-2xl block mb-2">🚑</span>
+                  <p className="text-sm text-slate-400 font-medium">No ambulances registered.</p>
+                </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {medicalVehicles.map(vehicle => (
                     <div
                       key={vehicle.id}
-                      className={`p-3 rounded-lg border-2 ${
+                      className={`p-4 rounded-2xl border transition-all duration-200 ${
                         selectedVehicle?.id === vehicle.id
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 bg-gray-50'
+                          ? 'border-indigo-500 bg-indigo-50/50 shadow-md ring-1 ring-indigo-500/20'
+                          : 'border-slate-100 bg-white hover:border-indigo-200 hover:shadow-sm'
                       }`}
                     >
-                      <div className="flex justify-between items-start mb-2">
+                      <div className="flex justify-between items-start mb-3">
                         <div>
-                          <div className="font-semibold text-gray-800">
+                          <div className="font-bold text-slate-800 flex items-center gap-2">
                             {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
                           </div>
-                          <div className="text-xs text-gray-600">
+                          <div className="text-xs font-mono text-slate-400 mt-1">
                             {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
                           </div>
                         </div>
                         <span
-                          className={`px-2 py-1 rounded text-xs font-semibold ${
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
                             vehicle.status === 'on_duty'
-                              ? 'bg-red-100 text-red-700'
-                              : 'bg-green-100 text-green-700'
+                              ? 'bg-rose-100 text-rose-600'
+                              : 'bg-emerald-100 text-emerald-600'
                           }`}
                         >
-                          {vehicle.status === 'on_duty' ? 'ON DUTY' : 'VACANT'}
+                          {vehicle.status === 'on_duty' ? 'BUSY' : 'READY'}
                         </span>
                       </div>
 
-                      <div className="flex gap-2 mt-2">
+                      <div className="grid grid-cols-2 gap-2 mb-3">
                         <button
                           onClick={() => updateVehicleLocation(vehicle.id)}
-                          className="flex-1 px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+                          className="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
                         >
-                          📍 Update Location
+                          Update Loc
                         </button>
                         <button
                           onClick={() =>
@@ -2149,33 +1521,37 @@ export default function Home() {
                               vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
                             )
                           }
-                          className="flex-1 px-2 py-1 bg-yellow-500 text-white text-xs rounded hover:bg-yellow-600"
+                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
+                            vehicle.status === 'on_duty'
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
+                              : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                          }`}
                         >
-                          {vehicle.status === 'on_duty' ? 'Set Vacant' : 'Set On Duty'}
+                          {vehicle.status === 'on_duty' ? 'Set Free' : 'Set Busy'}
                         </button>
                       </div>
 
-                      <div className="mt-2 space-y-2">
+                      <div className="space-y-2 pt-3 border-t border-slate-100/50">
                         {selectedVehicle?.id === vehicle.id && trackingInterval ? (
                           <button
                             onClick={stopTracking}
-                            className="w-full px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                            className="w-full px-3 py-2 bg-rose-500 text-white text-xs font-bold rounded-xl hover:bg-rose-600 shadow-sm shadow-rose-500/20 transition-all flex items-center justify-center gap-2"
                           >
-                            ⏹️ Stop Tracking
+                            <span className="animate-pulse">●</span> Stop Tracking
                           </button>
                         ) : (
                           <button
                             onClick={() => startTracking(vehicle.id)}
-                            className="w-full px-2 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600"
+                            className="w-full px-3 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 shadow-sm shadow-indigo-500/20 transition-all"
                           >
-                            ▶️ Start Real-time Tracking
+                            Start Live Tracking
                           </button>
                         )}
                         <button
                           onClick={() => deleteVehicle(vehicle.id)}
-                          className="w-full px-2 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                          className="w-full px-3 py-2 text-rose-500 text-xs font-bold rounded-xl hover:bg-rose-50 transition-all"
                         >
-                          🗑️ Delete Ambulance
+                          Remove Unit
                         </button>
                       </div>
                     </div>
@@ -2188,4 +1564,21 @@ export default function Home() {
       )}
     </div>
   );
+}
+
+function getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const R = 6371; // Radius of the earth in km
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return d * 1000; // Distance in meters
+}
+
+function deg2rad(deg: number) {
+  return deg * (Math.PI / 180);
 }
