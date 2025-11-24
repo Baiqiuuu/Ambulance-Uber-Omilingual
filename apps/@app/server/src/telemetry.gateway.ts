@@ -6,7 +6,14 @@ import {
 import { Server } from 'socket.io';
 import { Injectable } from '@nestjs/common';
 
-@WebSocketGateway({ cors: { origin: '*' }, transports: ['websocket'] })
+@WebSocketGateway({ 
+  cors: { 
+    origin: '*',
+    credentials: true,
+  },
+  transports: ['websocket', 'polling'], // 允许多种传输方式以提高兼容性
+  allowEIO3: true, // 允许 Socket.IO v3 客户端连接
+})
 @Injectable()
 export class TelemetryGateway implements OnGatewayInit {
   @WebSocketServer()
@@ -24,7 +31,22 @@ export class TelemetryGateway implements OnGatewayInit {
 
   private intervalId: NodeJS.Timeout | null = null;
 
-  afterInit() {
+  afterInit(server: Server) {
+    console.log('WebSocket Gateway initialized');
+    console.log(`Server listening on port ${process.env.PORT || 4000}`);
+    
+    // 监听连接事件
+    server.on('connection', (socket) => {
+      console.log(`Client connected: ${socket.id}`);
+      
+      socket.on('disconnect', (reason) => {
+        console.log(`Client disconnected: ${socket.id}, reason: ${reason}`);
+      });
+      
+      socket.on('error', (error) => {
+        console.error(`Socket error for ${socket.id}:`, error);
+      });
+    });
     // Simulate: push random vehicle position every 2 seconds
     setInterval(() => {
       const id = 'A1';
