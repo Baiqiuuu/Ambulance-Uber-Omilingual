@@ -67,3 +67,6 @@ Open your browser and visit http://localhost:3000, you should see:
 3. **Mapbox map not displaying**: Check if `NEXT_PUBLIC_MAPBOX_TOKEN` is correctly set
 
 
+
+
+

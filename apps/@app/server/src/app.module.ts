@@ -2,9 +2,16 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { TelemetryGateway } from './telemetry.gateway';
+import { VehicleController } from './vehicle.controller';
+import { AEDController } from './aed.controller';
+import { MedicalController } from './medical.controller';
 import { Vehicle } from './vehicle.entity';
 import { Dispatch } from './dispatch.entity';
+
 import { LocationsModule } from './locations/locations.module';
+
+import { AED } from './aed.entity';
+
 
 @Module({
   imports: [
@@ -38,9 +45,14 @@ import { LocationsModule } from './locations/locations.module';
         };
       },
     }),
+
     TypeOrmModule.forFeature([Vehicle, Dispatch]),
     LocationsModule,
+
+    TypeOrmModule.forFeature([Vehicle, Dispatch, AED]),
+
   ],
+  controllers: [VehicleController, AEDController, MedicalController],
   providers: [TelemetryGateway],
 })
 export class AppModule {}
