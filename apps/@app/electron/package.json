@@ -4,7 +4,7 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
-    "dev": "cross-env ELECTRON_DISABLE_SECURITY_WARNINGS=1 electron .",
+    "dev": "tsc && cross-env ELECTRON_DISABLE_SECURITY_WARNINGS=1 electron .",
     "start": "electron ."
   },
   "dependencies": {
