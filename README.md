@@ -58,7 +58,7 @@ NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
 ```env
 PORT=4000
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/ems
-# 选填：覆盖默认的 CSV 数据源
+# Optional: Override default CSV data source
 LOCATION_CSV_PATH=/absolute/path/to/languoid.csv
 ```
 
@@ -102,15 +102,15 @@ pnpm dev:electron
 - Unique dispatch constraint at database level
 - Monorepo structure for code sharing
 - Dockerized database services
-- CSV 预加载与最近点查询 (`GET /api/locations/nearest`)
-- 前端地图点击可查询附近语言点并展示 Top5
+- CSV preloading with nearest point query (`GET /api/locations/nearest`)
+- Frontend map click to query nearby language points and display Top 5
 
-### 最近点 API
+### Nearest Point API
 
 - **Endpoint**: `GET /api/locations/nearest?lat=<number>&lng=<number>&limit=<1-50>`
-- **描述**: 返回与给定经纬度最接近的 CSV 记录，可指定最多 50 条。
-- **配置**: 默认使用仓库根目录的 `languoid.csv`，也可通过 `LOCATION_CSV_PATH` 指向其他大体量 CSV。
-- **响应示例**:
+- **Description**: Returns CSV records closest to the given latitude and longitude, with a maximum of 50 records.
+- **Configuration**: By default uses `languoid.csv` in the repository root, or can be overridden via `LOCATION_CSV_PATH` to point to other large CSV files.
+- **Response Example**:
   ```json
   {
     "data": [
@@ -129,10 +129,10 @@ pnpm dev:electron
   }
   ```
 
-### 前端临近点交互
+### Frontend Nearest Point Interaction
 
-- 在 web 地图界面点击任意位置将触发最近点查询，并在右上角侧边栏展示最接近的 5 个语言点（含距离）。
-- 侧边栏会动态显示加载状态和错误信息，并在地图上以蓝色标记突出当前位置与返回的语言点。
+- Clicking anywhere on the web map interface will trigger a nearest point query, displaying the 5 closest language points (with distance) in the top-right sidebar.
+- The sidebar dynamically shows loading status and error messages, and highlights the current position and returned language points with blue markers on the map.
 
 ## Available Scripts
 

@@ -13,7 +13,7 @@ export class TelemetryGateway implements OnGatewayInit {
   server!: Server;
 
   afterInit() {
-    // 模拟：每2秒推一次随机车辆位置
+    // Simulate: push random vehicle position every 2 seconds
     setInterval(() => {
       const id = 'A1';
       const baseLat = 39.95,

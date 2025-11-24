@@ -1,3 +1,3 @@
 
-可以直接使用npx --yes pnpm@10.22.0 dev进行调试，之后会显示地图
+You can directly use `npx --yes pnpm@10.22.0 dev` for debugging, and the map will be displayed afterwards.
 

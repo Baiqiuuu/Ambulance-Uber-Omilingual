@@ -36,7 +36,7 @@ export class LocationIndexService implements OnModuleInit {
     try {
       await this.initIndex();
     } catch (error) {
-      this.logger.error('初始化地理索引失败', error as Error);
+      this.logger.error('Failed to initialize geographic index', error as Error);
       throw error;
     }
   }
@@ -116,7 +116,7 @@ export class LocationIndexService implements OnModuleInit {
       this.index = new KDBush(rows, (record) => record.longitude, (record) => record.latitude, 64);
     } catch (error) {
       this.index = null;
-      this.logger.error('构建空间索引失败，系统将退化为线性搜索', error as Error);
+      this.logger.error('Failed to build spatial index, falling back to linear search', error as Error);
     }
 
     const elapsed = performance.now() - startedAt;
@@ -131,7 +131,7 @@ export class LocationIndexService implements OnModuleInit {
     };
 
     this.logger.log(
-      `已加载 ${rows.length} 个地理点，耗时 ${this.stats.buildDurationMs}ms（跳过 ${skippedRows} 行）`,
+      `Loaded ${rows.length} geographic points in ${this.stats.buildDurationMs}ms (skipped ${skippedRows} rows)`,
     );
   }
 
@@ -154,7 +154,7 @@ export class LocationIndexService implements OnModuleInit {
     }
 
     throw new Error(
-      `未能定位 CSV 数据源，请通过 LOCATION_CSV_PATH 指定文件。尝试路径：${candidates.join(', ')}`,
+      `Unable to locate CSV data source, please specify file via LOCATION_CSV_PATH. Attempted paths: ${candidates.join(', ')}`,
     );
   }
 

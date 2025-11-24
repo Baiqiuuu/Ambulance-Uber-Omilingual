@@ -69,14 +69,14 @@ export default function Home() {
         });
 
         if (!res.ok) {
-          throw new Error(`请求失败：${res.status}`);
+          throw new Error(`Request failed: ${res.status}`);
         }
 
         const payload = await res.json();
         setNearest(payload.data);
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
-          setNearestError((error as Error).message || '查询失败');
+          setNearestError((error as Error).message || 'Query failed');
           setNearest(null);
         }
       } finally {
@@ -105,24 +105,24 @@ export default function Home() {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-gray-50">
         <div className="max-w-md p-6 bg-white rounded-lg shadow-lg border border-red-200">
-          <h2 className="text-xl font-bold text-red-600 mb-4">Mapbox Token 缺失</h2>
+          <h2 className="text-xl font-bold text-red-600 mb-4">Mapbox Token Missing</h2>
           <p className="text-gray-700 mb-4">
-            请在项目根目录创建 <code className="bg-gray-100 px-2 py-1 rounded text-sm">.env</code> 文件并设置 <code className="bg-gray-100 px-2 py-1 rounded text-sm">NEXT_PUBLIC_MAPBOX_TOKEN</code>。
+            Please create a <code className="bg-gray-100 px-2 py-1 rounded text-sm">.env</code> file in the project root directory and set <code className="bg-gray-100 px-2 py-1 rounded text-sm">NEXT_PUBLIC_MAPBOX_TOKEN</code>.
           </p>
           <div className="space-y-2 text-sm text-gray-600">
-            <p><strong>步骤：</strong></p>
+            <p><strong>Steps:</strong></p>
             <ol className="list-decimal list-inside space-y-1 ml-2">
-              <li>复制 <code className="bg-gray-100 px-1 rounded">.env.example</code> 文件为 <code className="bg-gray-100 px-1 rounded">.env</code></li>
-              <li>访问 <a href="https://account.mapbox.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Mapbox 账户页面</a></li>
-              <li>登录或注册账号</li>
-              <li>在 "Access tokens" 部分获取你的 token</li>
-              <li>将 token 粘贴到 <code className="bg-gray-100 px-1 rounded">.env</code> 文件中</li>
-              <li>重启开发服务器</li>
+              <li>Copy <code className="bg-gray-100 px-1 rounded">.env.example</code> file to <code className="bg-gray-100 px-1 rounded">.env</code></li>
+              <li>Visit <a href="https://account.mapbox.com/" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Mapbox account page</a></li>
+              <li>Login or register an account</li>
+              <li>Get your token from the "Access tokens" section</li>
+              <li>Paste the token into the <code className="bg-gray-100 px-1 rounded">.env</code> file</li>
+              <li>Restart the development server</li>
             </ol>
           </div>
           <div className="mt-4 pt-4 border-t border-gray-200">
             <p className="text-xs text-gray-500">
-              提示：你可以参考 <code className="bg-gray-100 px-1 rounded">SETUP.md</code> 文件获取更多帮助。
+              Tip: You can refer to the <code className="bg-gray-100 px-1 rounded">SETUP.md</code> file for more help.
             </p>
           </div>
         </div>
@@ -159,26 +159,26 @@ export default function Home() {
           ))}
       </MapGL>
       <div className="absolute left-4 bottom-4 bg-white/90 backdrop-blur-sm rounded-md shadow-lg px-3 py-2 text-xs text-gray-800 pointer-events-none">
-        <div className="text-[0.65rem] uppercase tracking-wide text-gray-500 mb-1 font-semibold">点击坐标</div>
+        <div className="text-[0.65rem] uppercase tracking-wide text-gray-500 mb-1 font-semibold">Clicked Coordinates</div>
         <div>Lat: {clickedCoord ? clickedCoord.lat.toFixed(5) : '--.--'}</div>
         <div>Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
       </div>
       <div className="absolute right-4 top-4 w-64 max-h-[70vh] overflow-hidden flex flex-col bg-white/95 backdrop-blur rounded-xl shadow-xl border border-gray-100">
         <div className="px-4 py-3 border-b border-gray-100">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">临近语言点</p>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Nearby Language Points</p>
           {clickedCoord ? (
             <p className="text-sm text-gray-700 mt-1">
               Lat {clickedCoord.lat.toFixed(3)}, Lng {clickedCoord.lng.toFixed(3)}
             </p>
           ) : (
-            <p className="text-sm text-gray-400 mt-1">点击地图以查询</p>
+            <p className="text-sm text-gray-400 mt-1">Click on map to query</p>
           )}
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3 text-sm text-gray-800">
-          {!clickedCoord && <p className="text-gray-500">尚未选择坐标。</p>}
-          {clickedCoord && nearestLoading && <p className="text-blue-600">正在加载...</p>}
+          {!clickedCoord && <p className="text-gray-500">No coordinates selected yet.</p>}
+          {clickedCoord && nearestLoading && <p className="text-blue-600">Loading...</p>}
           {clickedCoord && nearestError && (
-            <p className="text-red-500 text-sm">查询失败：{nearestError}</p>
+            <p className="text-red-500 text-sm">Query failed: {nearestError}</p>
           )}
           {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
             <ul className="space-y-2">
@@ -200,7 +200,7 @@ export default function Home() {
             </ul>
           )}
           {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
-            <p className="text-gray-500">该位置附近暂无可用数据。</p>
+            <p className="text-gray-500">No data available near this location.</p>
           )}
         </div>
       </div>

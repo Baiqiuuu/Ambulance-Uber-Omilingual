@@ -1,7 +1,7 @@
 import { Entity, PrimaryGeneratedColumn, Column, Index } from 'typeorm';
 
 @Entity()
-@Index(['incidentId'], { unique: true }) // 同一 incident 只能有一个派单
+@Index(['incidentId'], { unique: true }) // Only one dispatch per incident
 export class Dispatch {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
