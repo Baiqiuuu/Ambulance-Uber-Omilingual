@@ -9,7 +9,10 @@ async function createWindow() {
     height: 800,
     webPreferences: {
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false, // Disabled to allow WebSocket connections (required for socket.io to work)
+      nodeIntegration: false, // Keep disabled for security
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
   });
 

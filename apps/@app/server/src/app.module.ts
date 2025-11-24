@@ -5,6 +5,7 @@ import { TelemetryGateway } from './telemetry.gateway';
 import { VehicleController } from './vehicle.controller';
 import { AEDController } from './aed.controller';
 import { MedicalController } from './medical.controller';
+import { AppController } from './app.controller';
 import { Vehicle } from './vehicle.entity';
 import { Dispatch } from './dispatch.entity';
 
@@ -52,7 +53,7 @@ import { AED } from './aed.entity';
     TypeOrmModule.forFeature([Vehicle, Dispatch, AED]),
 
   ],
-  controllers: [VehicleController, AEDController, MedicalController],
+  controllers: [AppController, VehicleController, AEDController, MedicalController],
   providers: [TelemetryGateway],
 })
 export class AppModule {}

@@ -1,9 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import MapGL, { Marker, MapLayerMouseEvent } from 'react-map-gl';
-import { useEffect, useState, useCallback, useRef } from 'react';
-import MapGL, { Marker, Source, Layer } from 'react-map-gl';
+import MapGL, { Marker, MapLayerMouseEvent, Source, Layer } from 'react-map-gl';
 import type { MapRef } from 'react-map-gl';
 import type { Map as MapboxMap, CustomLayerInterface } from 'mapbox-gl';
 import mapboxgl from 'mapbox-gl';
@@ -12,7 +10,6 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
-type Vehicle = { id: string; lat: number; lng: number };
 type NearestLocation = {
   id: string;
   name: string;
@@ -20,6 +17,7 @@ type NearestLocation = {
   latitude: number;
   longitude: number;
   distanceMeters: number;
+};
 type Vehicle = { id: string; lat: number; lng: number; status?: string; name?: string };
 type Coordinate = { id: string; lat: number; lng: number };
 type SharedLocation = { id: string; lat: number; lng: number; message?: string };
@@ -603,10 +601,15 @@ export default function Home() {
     model?: THREE.Group | null;
     modelInstances: THREE.Group[];
     map?: MapboxMap;
+    testOriginObject?: THREE.Mesh;
   }>({ modelInstances: [] });
 
+  // 3D model layer disabled - using 2D markers instead
   // Use useEffect to add 3D model layer
   useEffect(() => {
+    // DISABLED: 3D model layer - using 2D markers instead
+    return;
+    /*
     const map = mapRef.current?.getMap();
     if (!map || !mapLoaded) return;
 
@@ -640,7 +643,8 @@ export default function Home() {
         
         // Create Three.js scene
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        // Camera settings - use wider FOV and larger near/far planes for custom layer
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.0001, 10000);
         
         // Use Mapbox's WebGL context
         const renderer = new THREE.WebGLRenderer({
@@ -656,14 +660,6 @@ export default function Home() {
         layerData.camera = camera;
         layerData.renderer = renderer;
 
-        // Add a test cube to verify rendering works
-        const testGeometry = new THREE.BoxGeometry(0.001, 0.001, 0.001);
-        const testMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const testCube = new THREE.Mesh(testGeometry, testMaterial);
-        testCube.position.set(0, 0, 0);
-        scene.add(testCube);
-        console.log('Added test cube to scene');
-
         // Load ambulance model
         const loader = new GLTFLoader();
         console.log('Loading ambulance model: /models/ambulance.glb');
@@ -673,67 +669,189 @@ export default function Home() {
             console.log('Ambulance model loaded successfully', gltf);
             const model = gltf.scene;
             if (model) {
+              // Center the model at origin
               const box = new THREE.Box3().setFromObject(model);
+              const center = box.getCenter(new THREE.Vector3());
               const size = box.getSize(new THREE.Vector3());
               const maxDim = Math.max(size.x, size.y, size.z);
               
+              // Offset model to center it
+              model.position.x = -center.x;
+              model.position.y = -center.y;
+              model.position.z = -center.z;
+              
               // Calculate appropriate scale based on model size
-              // Target size: approximately 20-30 meters in real world
+              // Target size: approximately 15-20 meters in real world
               // Mercator coordinates: 1 unit ≈ 40075017 meters at equator
-              // So 20 meters ≈ 20 / 40075017 ≈ 0.0000005 units
-              // But we need larger scale for visibility, so use 0.0001 to 0.0005
-              const targetSizeInMeters = 25; // 25 meters
+              const targetSizeInMeters = 20; // 20 meters (ambulance length)
               const metersPerMercatorUnit = 40075017; // at equator
               const targetSizeInMercator = targetSizeInMeters / metersPerMercatorUnit;
               const finalScale = targetSizeInMercator / maxDim;
               
-              // Clamp scale to reasonable range
-              const clampedScale = Math.max(0.0001, Math.min(0.001, finalScale));
+              // Clamp scale to reasonable range for visibility
+              // Use much larger scale to make model more visible
+              // If maxDim is very small, use a fixed large scale
+              let clampedScale;
+              if (maxDim < 0.001) {
+                // Model is very small, use a fixed large scale
+                clampedScale = 0.01; // Large fixed scale
+                console.warn('Model is very small, using fixed large scale:', clampedScale);
+              } else {
+                clampedScale = Math.max(0.001, Math.min(0.01, finalScale));
+              }
               
               console.log('Model size:', size, 'Max dimension:', maxDim);
+              console.log('Model center:', center);
               console.log('Calculated scale:', finalScale, 'Clamped scale:', clampedScale);
               model.scale.set(clampedScale, clampedScale, clampedScale);
               
-              // Ensure model is visible
+              // Add a test sphere at origin to verify rendering works
+              const testGeometry = new THREE.SphereGeometry(0.0003, 16, 16);
+              const testMaterial = new THREE.MeshBasicMaterial({ 
+                color: 0xff0000, 
+                transparent: true, 
+                opacity: 0.9,
+                side: THREE.DoubleSide
+              });
+              const testSphere = new THREE.Mesh(testGeometry, testMaterial);
+              testSphere.position.set(0, 0, 0);
+              scene.add(testSphere);
+              console.log('Added red test sphere at origin (0,0,0) for debugging');
+              
+              // Ensure model is visible and properly configured
               model.traverse((child: any) => {
                 if (child.isMesh) {
                   child.visible = true;
                   child.castShadow = true;
                   child.receiveShadow = true;
+                  // Ensure materials are visible
+                  if (child.material) {
+                    if (Array.isArray(child.material)) {
+                      child.material.forEach((mat: any) => {
+                        if (mat) mat.visible = true;
+                      });
+                    } else {
+                      child.material.visible = true;
+                    }
+                  }
                 }
               });
+              
+              // Make sure the model itself is visible
+              model.visible = true;
+              
+              // Add model to scene immediately to verify it's there
+              scene.add(model);
+              console.log('✅ Model added directly to scene for testing');
+              
+              // Log model details
+              let meshCount = 0;
+              model.traverse((child: any) => {
+                if (child.isMesh) {
+                  meshCount++;
+                  console.log(`  Mesh ${meshCount}:`, {
+                    name: child.name,
+                    visible: child.visible,
+                    position: child.position,
+                    scale: child.scale,
+                    material: child.material ? (Array.isArray(child.material) ? child.material.length : 1) : 0
+                  });
+                }
+              });
+              console.log(`✅ Model has ${meshCount} meshes`);
               
               layerData.model = model;
               modelLoadedRef.current = true;
               setModelReady(true);
               
-              console.log('Model set, ready to create instances, current vehicle count:', vehiclesRef.current.length);
+              console.log('✅ Model set, ready to create instances, current vehicle count:', vehiclesRef.current.length);
               
               // Create model instances for each vehicle
               updateModelInstances();
+            } else {
+              console.error('Model scene is null or undefined');
             }
           },
           (progress: any) => {
-            console.log('Model loading progress:', progress);
+            if (progress.total > 0) {
+              const percent = (progress.loaded / progress.total) * 100;
+              console.log('Model loading progress:', percent.toFixed(2) + '%');
+            }
           },
           (error: any) => {
             console.error('Failed to load ambulance model:', error);
+            console.error('Error details:', {
+              message: error?.message,
+              stack: error?.stack,
+              url: '/models/ambulance.glb'
+            });
           }
         );
       },
       render: function (gl: WebGLRenderingContext, matrix: number[]) {
-        const { scene, camera, renderer, model, modelInstances } = layerRef.current;
-        
-        // Get latest vehicles from ref to avoid closure issues
-        const currentVehicles = vehiclesRef.current;
-        
-        // If no model or no vehicles, don't render
-        if (!scene || !camera || !renderer || !model) {
-          if (!model) {
-            console.log('render: model not loaded');
+        try {
+          const { scene, camera, renderer, model, modelInstances } = layerRef.current;
+          
+          // Get latest vehicles from ref to avoid closure issues
+          const currentVehicles = vehiclesRef.current;
+          
+          // The matrix from Mapbox is a 4x4 matrix that combines:
+          // - Projection matrix
+          // - Model-view matrix (transforms from Mercator to clip space)
+          // We need to use this directly for the camera
+          const transform = new THREE.Matrix4().fromArray(matrix);
+          
+          // Debug: log render call info
+          if (Math.random() < 0.01) {
+            console.log('🎨 Render called:', {
+              hasScene: !!scene,
+              hasCamera: !!camera,
+              hasRenderer: !!renderer,
+              hasModel: !!model,
+              vehiclesCount: currentVehicles.length,
+              instancesCount: modelInstances?.length || 0,
+              'scene children': scene?.children?.length || 0,
+              'map zoom': layerRef.current.map?.getZoom()
+            });
           }
-          return;
-        }
+          
+          // If no scene/camera/renderer, don't render
+          if (!scene || !camera || !renderer) {
+            return;
+          }
+          
+          // If no model, still render test geometries if they exist
+          if (!model) {
+            // Only log occasionally to avoid spam
+            if (Math.random() < 0.01) {
+              console.log('⚠️ render: model not loaded, but rendering scene anyway');
+            }
+            // Still render the scene (might have test geometries)
+            try {
+              renderer.resetState();
+              gl.enable(gl.DEPTH_TEST);
+              gl.depthFunc(gl.LEQUAL);
+              gl.enable(gl.BLEND);
+              gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+              gl.depthMask(true);
+              gl.disable(gl.CULL_FACE);
+              gl.clear(gl.DEPTH_BUFFER_BIT);
+              
+              camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+              camera.projectionMatrixInverse = camera.projectionMatrix.clone().invert();
+              
+              const map = layerRef.current.map;
+              if (map) {
+                const canvas = map.getCanvas();
+                renderer.setSize(canvas.width, canvas.height);
+                renderer.render(scene, camera);
+                map.triggerRepaint();
+              }
+            } catch (error) {
+              console.error('Error rendering scene without model:', error);
+            }
+            return;
+          }
 
         // Ensure we have the right number of instances
         if (currentVehicles.length !== modelInstances.length) {
@@ -774,112 +892,416 @@ export default function Home() {
         }
 
         // Set camera projection matrix (using Mapbox-provided matrix)
-        camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
-        camera.projectionMatrixInverse = camera.projectionMatrix.clone().invert();
+        // The matrix from Mapbox is a combined projection and model-view matrix
+        // It transforms from Mercator coordinates (relative to map center) to clip space
+        camera.projectionMatrix = transform.clone();
+        camera.projectionMatrixInverse = transform.clone().invert();
+        
+        // Add a test object at map center (0,0,0) to verify coordinate system
+        // This should appear at the center of the map view
+        if (!layerRef.current.testOriginObject) {
+          const testSize = 0.05; // Large test object
+          const testGeometry = new THREE.BoxGeometry(testSize, testSize, testSize);
+          const testMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x0000ff, // Blue - different from vehicle test cubes
+            transparent: false,
+            side: THREE.DoubleSide
+          });
+          const testObject = new THREE.Mesh(testGeometry, testMaterial);
+          testObject.matrixAutoUpdate = false;
+          testObject.matrix.identity(); // Position at origin (0,0,0) = map center
+          testObject.visible = true;
+          testObject.frustumCulled = false;
+          scene.add(testObject);
+          layerRef.current.testOriginObject = testObject;
+          console.log('✅ Added BLUE test cube at map center (0,0,0)');
+        }
 
         // Update position of each model instance
         currentVehicles.forEach((vehicle, index) => {
           if (index >= modelInstances.length) return;
           
-          const instance = modelInstances[index];
-          const [lng, lat] = [vehicle.lng, vehicle.lat];
-          
-          // Convert lat/lng to Mercator coordinates
-          // Height in meters: 50 meters above ground
-          const heightInMeters = 50;
-          const mercator = mapboxgl.MercatorCoordinate.fromLngLat([lng, lat], heightInMeters);
-          
-          // Get map center in Mercator coordinates (at same height)
-          const centerMercator = mapboxgl.MercatorCoordinate.fromLngLat(
-            [map.getCenter().lng, map.getCenter().lat],
-            heightInMeters
-          );
-          
-          // Calculate position relative to map center
-          const x = mercator.x - centerMercator.x;
-          const y = mercator.y - centerMercator.y;
-          const z = mercator.z - centerMercator.z;
-          
-          // Mapbox uses Z-up, Three.js uses Y-up
-          // Transform: Mapbox (X, Y, Z) -> Three.js (X, Z, -Y)
-          // This means: X stays X, Y becomes -Z, Z becomes Y
-          const threeX = x;
-          const threeY = z;
-          const threeZ = -y;
-          
-          // Create translation matrix
-          const translation = new THREE.Matrix4().makeTranslation(threeX, threeY, threeZ);
-          
-          // Apply transformation to instance
-          instance.matrix.copy(translation);
-          instance.matrixAutoUpdate = false;
-          instance.visible = true;
-          
-          // Debug info (print every 100 frames)
-          if (index === 0 && Math.random() < 0.01) {
-            console.log('Model position debug:', {
-              lng,
-              lat,
-              heightInMeters,
-              mercator: { x: mercator.x.toFixed(6), y: mercator.y.toFixed(6), z: mercator.z.toFixed(6) },
-              position: { x: x.toFixed(6), y: y.toFixed(6), z: z.toFixed(6) },
-              'objects in scene': scene.children.length,
-              'model instances': modelInstances.length
+          try {
+            const instance = modelInstances[index];
+            const [lng, lat] = [vehicle.lng, vehicle.lat];
+            
+            // Validate coordinates
+            if (!isFinite(lng) || !isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) {
+              console.warn(`Invalid coordinates for vehicle ${vehicle.id}:`, { lng, lat });
+              return;
+            }
+            
+            // Convert lat/lng to Mercator coordinates
+            // Height in meters: 5 meters above ground (ambulance height)
+            const heightInMeters = 5;
+            let mercator;
+            
+            try {
+              mercator = mapboxgl.MercatorCoordinate.fromLngLat([lng, lat], heightInMeters);
+            } catch (error) {
+              console.error(`Error converting coordinates for vehicle ${vehicle.id}:`, error);
+              return;
+            }
+            
+            // Mapbox custom layer uses a coordinate system where:
+            // - The origin (0,0,0) is at the map center
+            // - X points east, Y points north, Z points up
+            // - Three.js uses Y-up, so we need to transform: (x, y, z) -> (x, z, -y)
+            
+            // Get map center in Mercator coordinates
+            const mapCenter = map.getCenter();
+            const centerMercator = mapboxgl.MercatorCoordinate.fromLngLat(
+              [mapCenter.lng, mapCenter.lat],
+              heightInMeters
+            );
+            
+            // Calculate position relative to map center in Mercator space
+            const x = mercator.x - centerMercator.x;
+            const y = mercator.y - centerMercator.y;
+            const z = mercator.z - centerMercator.z;
+            
+            // Validate calculated positions
+            if (!isFinite(x) || !isFinite(y) || !isFinite(z)) {
+              console.warn(`Invalid calculated position for vehicle ${vehicle.id}:`, { x, y, z });
+              return;
+            }
+            
+            // Transform from Mapbox coordinate system to Three.js
+            // Mapbox custom layer uses: X=east, Y=north, Z=up (relative to map center)
+            // Three.js uses: X=east, Y=up, Z=forward (typically negative Y from Mapbox)
+            // Try both directions and see which one works
+            // Based on Mapbox examples, the correct transform is:
+            const threeX = x;   // East stays east
+            const threeY = z;   // Up (Z) becomes up (Y) in Three.js  
+            const threeZ = -y;  // North (Y) becomes -Z in Three.js (south direction)
+            
+            // Alternative: try without negation if above doesn't work
+            // const threeZ = y;
+            
+            // Validate Three.js coordinates
+            if (!isFinite(threeX) || !isFinite(threeY) || !isFinite(threeZ)) {
+              console.warn(`Invalid Three.js coordinates for vehicle ${vehicle.id}:`, { threeX, threeY, threeZ });
+              return;
+            }
+            
+            // Create transformation matrix
+            // Use makeTranslation to create a translation matrix
+            const translation = new THREE.Matrix4().makeTranslation(threeX, threeY, threeZ);
+            
+            // Apply transformation to instance
+            instance.matrix.copy(translation);
+            instance.matrixAutoUpdate = false;
+            instance.visible = true;
+            
+            // Add a VERY LARGE test cube at vehicle position for debugging (for all vehicles)
+            // This will help us verify if rendering is working at all
+            if (!instance.userData.testCubeAdded) {
+              try {
+                // Create a MUCH larger, very visible test cube
+                // Scale based on zoom level to ensure visibility
+                // At low zoom levels, use much larger size
+                const zoom = map.getZoom();
+                // Use larger base size and less aggressive scaling for low zoom
+                const baseSize = zoom < 5 ? 0.1 : 0.01; // Much larger at low zoom
+                const testCubeSize = Math.max(0.01, baseSize / Math.pow(2, Math.max(0, zoom - 5)));
+                const testCubeGeometry = new THREE.BoxGeometry(testCubeSize, testCubeSize * 3, testCubeSize);
+                const testCubeMaterial = new THREE.MeshBasicMaterial({ 
+                  color: index === 0 ? 0x00ff00 : 0xff00ff, // Green for first, magenta for others
+                  transparent: false, // No transparency for maximum visibility
+                  opacity: 1.0,
+                  side: THREE.DoubleSide,
+                  depthTest: true,
+                  depthWrite: true
+                });
+                const testCube = new THREE.Mesh(testCubeGeometry, testCubeMaterial);
+                testCube.matrixAutoUpdate = false;
+                testCube.matrix.identity();
+                testCube.matrix.setPosition(new THREE.Vector3(threeX, threeY, threeZ));
+                testCube.visible = true;
+                testCube.frustumCulled = false;
+                scene.add(testCube);
+                instance.userData.testCube = testCube;
+                instance.userData.testCubeAdded = true;
+                console.log(`✅ Added VERY LARGE test cube ${index} at vehicle position:`, { 
+                  vehicleId: vehicle.id,
+                  lng, 
+                  lat,
+                  threeX: threeX.toFixed(8), 
+                  threeY: threeY.toFixed(8), 
+                  threeZ: threeZ.toFixed(8),
+                  'map zoom': zoom,
+                  'cube size': testCubeSize,
+                  'scene children count': scene.children.length
+                });
+              } catch (error) {
+                console.error(`Error creating test cube for vehicle ${vehicle.id}:`, error);
+              }
+            } else {
+              // Update test cube position every frame
+              const testCube = instance.userData.testCube;
+              if (testCube) {
+                try {
+                  testCube.matrix.identity();
+                  testCube.matrix.setPosition(new THREE.Vector3(threeX, threeY, threeZ));
+                  testCube.visible = true;
+                } catch (error) {
+                  console.error(`Error updating test cube for vehicle ${vehicle.id}:`, error);
+                }
+              }
+            }
+            
+            // Also add a test sphere at the same position for extra visibility
+            if (!instance.userData.testSphereAdded) {
+              try {
+                const zoom = map.getZoom();
+                const testSphereSize = Math.max(0.0008, 0.008 / Math.pow(2, Math.max(0, zoom - 10)));
+                const testSphereGeometry = new THREE.SphereGeometry(testSphereSize, 16, 16);
+                const testSphereMaterial = new THREE.MeshBasicMaterial({ 
+                  color: 0xffff00, // Yellow
+                  transparent: false,
+                  side: THREE.DoubleSide
+                });
+                const testSphere = new THREE.Mesh(testSphereGeometry, testSphereMaterial);
+                testSphere.matrixAutoUpdate = false;
+                testSphere.matrix.identity();
+                testSphere.matrix.setPosition(new THREE.Vector3(threeX, threeY + testSphereSize * 2, threeZ));
+                testSphere.visible = true;
+                testSphere.frustumCulled = false;
+                scene.add(testSphere);
+                instance.userData.testSphere = testSphere;
+                instance.userData.testSphereAdded = true;
+                console.log(`✅ Added yellow test sphere above vehicle ${index}`);
+              } catch (error) {
+                console.error(`Error creating test sphere for vehicle ${vehicle.id}:`, error);
+              }
+            } else {
+              const testSphere = instance.userData.testSphere;
+              if (testSphere) {
+                try {
+                  const zoom = map.getZoom();
+                  const testSphereSize = Math.max(0.0008, 0.008 / Math.pow(2, Math.max(0, zoom - 10)));
+                  testSphere.matrix.identity();
+                  testSphere.matrix.setPosition(new THREE.Vector3(threeX, threeY + testSphereSize * 2, threeZ));
+                  testSphere.visible = true;
+                } catch (error) {
+                  console.error(`Error updating test sphere for vehicle ${vehicle.id}:`, error);
+                }
+              }
+            }
+            
+            // Ensure instance and all children are visible
+            instance.traverse((child: any) => {
+              if (child.isMesh) {
+                child.visible = true;
+              }
             });
+            
+            // Debug info (print for first vehicle - always log first time, then occasionally)
+            if (index === 0) {
+              const shouldLog = !instance.userData.positionLogged || Math.random() < 0.1;
+              if (shouldLog) {
+                const distance = Math.sqrt(threeX*threeX + threeY*threeY + threeZ*threeZ);
+                console.log('📍 Vehicle position debug:', {
+                  vehicleId: vehicle.id,
+                  'geo coords': { lng, lat },
+                  heightInMeters,
+                  'mercator (absolute)': { 
+                    x: mercator.x.toFixed(10), 
+                    y: mercator.y.toFixed(10), 
+                    z: mercator.z.toFixed(10) 
+                  },
+                  'center mercator': {
+                    x: centerMercator.x.toFixed(10),
+                    y: centerMercator.y.toFixed(10),
+                    z: centerMercator.z.toFixed(10)
+                  },
+                  'relative (mercator)': { 
+                    x: x.toFixed(10), 
+                    y: y.toFixed(10), 
+                    z: z.toFixed(10),
+                    'magnitude': Math.sqrt(x*x + y*y + z*z).toFixed(10)
+                  },
+                  'three.js position': { 
+                    x: threeX.toFixed(10), 
+                    y: threeY.toFixed(10), 
+                    z: threeZ.toFixed(10),
+                    'magnitude': distance.toFixed(10)
+                  },
+                  'map center': { lng: map.getCenter().lng, lat: map.getCenter().lat },
+                  'map zoom': map.getZoom(),
+                  'instance visible': instance.visible,
+                  'WARNING': distance > 1 ? '⚠️ Position is very far from origin! May be outside view.' : 'OK'
+                });
+                instance.userData.positionLogged = true;
+              }
+            }
+          } catch (error) {
+            console.error(`Error updating vehicle ${vehicle.id}:`, error);
           }
         });
 
-        // Render scene
-        renderer.resetState();
-        // Set WebGL state to ensure models render above map
-        gl.enable(gl.DEPTH_TEST);
-        gl.depthFunc(gl.LEQUAL);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        
-        renderer.render(scene, camera);
-        
-        // Force repaint
-        map.triggerRepaint();
+          // Render scene
+          try {
+            renderer.resetState();
+            // Set WebGL state to ensure models render above map
+            gl.enable(gl.DEPTH_TEST);
+            gl.depthFunc(gl.LEQUAL);
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+            gl.depthMask(true);
+            gl.disable(gl.CULL_FACE); // Disable culling to see models from all angles
+            
+            // Clear depth buffer to ensure models render on top
+            gl.clear(gl.DEPTH_BUFFER_BIT);
+            
+            // Set renderer size to match canvas
+            const canvas = map.getCanvas();
+            if (canvas) {
+              renderer.setSize(canvas.width, canvas.height);
+              
+              // Debug: log scene info and object positions
+              if (Math.random() < 0.1) {
+                const sceneObjects = scene.children.map((child: any, idx: number) => {
+                  const pos = child.position || { x: 0, y: 0, z: 0 };
+                  const matrixPos = new THREE.Vector3();
+                  if (child.matrix) {
+                    child.matrix.decompose(matrixPos, new THREE.Quaternion(), new THREE.Vector3());
+                  }
+                  return {
+                    index: idx,
+                    type: child.type,
+                    name: child.name || 'unnamed',
+                    visible: child.visible,
+                    position: { x: pos.x?.toFixed(6), y: pos.y?.toFixed(6), z: pos.z?.toFixed(6) },
+                    matrixPos: { x: matrixPos.x.toFixed(6), y: matrixPos.y.toFixed(6), z: matrixPos.z.toFixed(6) }
+                  };
+                });
+                console.log('🎨 Rendering scene:', {
+                  'scene children': scene.children.length,
+                  'model instances': modelInstances.length,
+                  'vehicles': currentVehicles.length,
+                  'canvas size': `${canvas.width}x${canvas.height}`,
+                  'objects': sceneObjects
+                });
+              }
+              
+              renderer.render(scene, camera);
+              
+              // Force repaint
+              map.triggerRepaint();
+            }
+          } catch (renderError) {
+            console.error('Error during render:', renderError);
+          }
+        } catch (error) {
+          console.error('Error in render function:', error);
+        }
       },
     };
 
     function updateModelInstances() {
       const { scene, model, modelInstances } = layerRef.current;
-      if (!scene || !model) return;
+      if (!scene || !model) {
+        console.warn('Cannot update model instances: scene or model not available', { scene: !!scene, model: !!model });
+        return;
+      }
       
       // Get latest vehicles from ref
       const currentVehicles = vehiclesRef.current;
       
+      console.log(`Updating model instances: ${currentVehicles.length} vehicles, ${modelInstances.length} existing instances`);
+      
       // Clear old instances
-      modelInstances.forEach(instance => scene.remove(instance));
+      modelInstances.forEach(instance => {
+        scene.remove(instance);
+        // Dispose of cloned geometry and materials to prevent memory leaks
+        instance.traverse((child: any) => {
+          if (child.isMesh) {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat: any) => mat?.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
+          }
+        });
+      });
       modelInstances.length = 0;
 
       // Create new instances
-      currentVehicles.forEach(() => {
+      currentVehicles.forEach((vehicle, index) => {
         const instance = model.clone();
         instance.visible = true;
         instance.matrixAutoUpdate = false;
+        instance.userData = { vehicleId: vehicle.id, logged: false };
         
-        // Ensure all child meshes are visible
+        // Ensure all child meshes are visible and properly configured
         instance.traverse((child: any) => {
           if (child.isMesh) {
             child.visible = true;
+            child.frustumCulled = false; // Disable frustum culling to ensure visibility
+            // Ensure materials are visible
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat: any) => {
+                  if (mat) {
+                    mat.visible = true;
+                    mat.needsUpdate = true;
+                    // Make materials more visible
+                    if (mat.emissive) {
+                      mat.emissive.multiplyScalar(1.2);
+                    }
+                  }
+                });
+              } else {
+                child.material.visible = true;
+                child.material.needsUpdate = true;
+                // Make materials more visible
+                if (child.material.emissive) {
+                  child.material.emissive.multiplyScalar(1.2);
+                }
+              }
+            }
           }
         });
         
         scene.add(instance);
         modelInstances.push(instance);
+        
+        console.log(`Created instance ${index} for vehicle ${vehicle.id}`);
       });
       
-      console.log(`Created ${modelInstances.length} model instances`);
+      console.log(`Created ${modelInstances.length} model instances, scene now has ${scene.children.length} objects`);
     }
 
     // Wait for map style to load before adding layer
     const addLayerWhenReady = () => {
       if (map.isStyleLoaded() && !map.getLayer('vehicles-3d-layer')) {
         console.log('Adding 3D model layer to map');
-        map.addLayer(customLayer);
+        try {
+          // Try to add layer at the top (after all other layers)
+          const layers = map.getStyle().layers;
+          if (layers && layers.length > 0) {
+            // Find the last layer ID to insert after it
+            const lastLayerId = layers[layers.length - 1].id;
+            map.addLayer(customLayer, lastLayerId);
+            console.log('3D model layer added after:', lastLayerId);
+          } else {
+            map.addLayer(customLayer);
+            console.log('3D model layer added (no existing layers)');
+          }
+        } catch (error) {
+          console.error('Error adding 3D layer:', error);
+          // Fallback: try adding without beforeId
+          try {
+            map.addLayer(customLayer);
+            console.log('3D model layer added (fallback)');
+          } catch (fallbackError) {
+            console.error('Failed to add 3D layer even with fallback:', fallbackError);
+          }
+        }
       }
     };
 
@@ -888,16 +1310,39 @@ export default function Home() {
     } else {
       map.once('style.load', addLayerWhenReady);
     }
+    
+    // Also listen for style changes to re-add layer if needed
+    const handleStyleChange = () => {
+      if (!map.getLayer('vehicles-3d-layer') && modelLoadedRef.current) {
+        console.log('Style changed, re-adding 3D layer');
+        setTimeout(addLayerWhenReady, 100);
+      }
+    };
+    map.on('style.load', handleStyleChange);
 
     // Cleanup function - only remove layer if component unmounts
     return () => {
       // Don't remove layer on every update, only on unmount
       // This prevents losing the model when vehicles update
     };
+    */
   }, [mapLoaded, mapStyle]); // Remove vehicles from dependencies to prevent layer recreation
 
   const handleMapLoad = useCallback(() => {
     setMapLoaded(true);
+    // Ensure map uses mercator projection (required for custom layers)
+    const map = mapRef.current?.getMap();
+    if (map) {
+      // Force mercator projection if not already set
+      try {
+        const currentProjection = (map as any).getProjection?.();
+        if (currentProjection && currentProjection.name !== 'mercator') {
+          console.warn('Map projection is not mercator, custom layer may not work correctly');
+        }
+      } catch (e) {
+        // Projection API might not be available in all versions
+      }
+    }
   }, []);
   
   const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
@@ -1007,6 +1452,8 @@ export default function Home() {
   }, [isDragging, dragStart, sidebarCollapsed]);
 
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
+  
+  useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
 
@@ -1151,6 +1598,7 @@ export default function Home() {
         }}
         mapboxAccessToken={mapboxToken}
         mapStyle={MAP_STYLES[mapStyle]}
+        projection={{ name: 'mercator' }}
         style={{ width: '100%', height: '100%' }}
         onLoad={handleMapLoad}
         onClick={handleMapClick}
@@ -1184,10 +1632,9 @@ export default function Home() {
           </Source>
         )}
 
-        {/* Fallback markers - only shown when 3D model not loaded or not ready */}
-        {/* Hide fallback markers when model is ready to avoid showing emoji instead of 3D model */}
+        {/* Vehicle markers - 2D markers for all vehicles */}
         {/* Show all vehicles in both modes */}
-        {mapLoaded && !modelReady && vehicles.length > 0 && vehicles.map(v => (
+        {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
             <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
               <div className={`text-white text-xs px-2 py-1 rounded shadow-lg border-2 border-white ${
                 v.status === 'on_duty' ? 'bg-red-600' : 'bg-gray-500'
@@ -1250,6 +1697,22 @@ export default function Home() {
               <div className="bg-blue-600/80 text-white text-[10px] px-1 rounded">{location.name}</div>
             </Marker>
           ))}
+        {/* Shared location marker with message */}
+        {sharedLocation && (
+          <Marker longitude={sharedLocation.lng} latitude={sharedLocation.lat}>
+            <div className="relative">
+              <div className="bg-red-500 w-4 h-4 rounded-full border-2 border-white shadow-lg"></div>
+              {sharedLocation.message && (
+                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-48 bg-white rounded-lg shadow-xl p-3 border border-gray-200">
+                  <div className="text-sm text-gray-800 whitespace-pre-wrap break-words">
+                    {sharedLocation.message}
+                  </div>
+                  <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
+                </div>
+              )}
+            </div>
+          </Marker>
+        )}
       </MapGL>
       <div className="absolute left-4 bottom-4 bg-white/90 backdrop-blur-sm rounded-md shadow-lg px-3 py-2 text-xs text-gray-800 pointer-events-none">
         <div className="text-[0.65rem] uppercase tracking-wide text-gray-500 mb-1 font-semibold">Clicked Coordinates</div>
@@ -1356,45 +1819,26 @@ export default function Home() {
           </div>
         )}
       </div>
-
-        {/* Shared location marker with message */}
-        {sharedLocation && (
-          <Marker longitude={sharedLocation.lng} latitude={sharedLocation.lat}>
-            <div className="relative">
-              <div className="bg-red-500 w-4 h-4 rounded-full border-2 border-white shadow-lg"></div>
-              {sharedLocation.message && (
-                <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-48 bg-white rounded-lg shadow-xl p-3 border border-gray-200">
-                  <div className="text-sm text-gray-800 whitespace-pre-wrap break-words">
-                    {sharedLocation.message}
-                  </div>
-                  <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
+      
+      {/* Debug info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
+          <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
+          <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => v.status === 'vacant').length})</div>
+          {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
+          <div>Coordinates: {coordinates.length}</div>
+          <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
+          {vehicles.length > 0 && (
+            <div className="mt-1">
+              {vehicles.map(v => (
+                <div key={v.id}>
+                  {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} ({v.status || 'unknown'})
                 </div>
-              )}
+              ))}
             </div>
-          </Marker>
-        )}
-        
-        {/* Debug info */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
-            <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
-            <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => v.status === 'vacant').length})</div>
-            {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
-            <div>Coordinates: {coordinates.length}</div>
-            <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
-            <div>3D model ready: {modelReady ? 'Yes' : 'No'}</div>
-            {vehicles.length > 0 && (
-              <div className="mt-1">
-                {vehicles.map(v => (
-                  <div key={v.id}>
-                    {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} ({v.status || 'unknown'})
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </MapGL>
+          )}
+        </div>
+      )}
       
       {/* View mode toggle button - top left */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
