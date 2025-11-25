@@ -20,6 +20,10 @@ interface UpdateVehicleStatusDto {
   status: 'vacant' | 'on_duty';
 }
 
+interface UpdateVehicleNameDto {
+  name: string;
+}
+
 @Controller('api/medical')
 export class MedicalController {
   constructor(
@@ -27,6 +31,42 @@ export class MedicalController {
     private vehicleRepository: Repository<Vehicle>,
     private readonly telemetryGateway: TelemetryGateway,
   ) {}
+
+  // Update vehicle name
+  @Put('vehicles/:id/name')
+  async updateVehicleName(
+    @Param('id') id: string,
+    @Body() dto: UpdateVehicleNameDto,
+  ) {
+    if (!dto.name || dto.name.trim().length === 0) {
+      return { success: false, message: 'Invalid name' };
+    }
+
+    const vehicle = await this.vehicleRepository.findOne({ where: { id } });
+    if (!vehicle) {
+      return { success: false, message: 'Vehicle not found' };
+    }
+
+    vehicle.name = dto.name;
+    vehicle.lastUpdate = new Date();
+
+    const updated = await this.vehicleRepository.save(vehicle);
+
+    // Emit vehicle location via WebSocket to update name
+    this.telemetryGateway.emitVehicleLocation(updated.id, updated.lat, updated.lng, updated.status, updated.name);
+
+    return {
+      success: true,
+      message: 'Vehicle name updated successfully',
+      vehicle: {
+        id: updated.id,
+        name: updated.name,
+        latitude: updated.lat,
+        longitude: updated.lng,
+        status: updated.status,
+      },
+    };
+  }
 
   // Register a new ambulance (using current location)
   @Post('vehicles/register')

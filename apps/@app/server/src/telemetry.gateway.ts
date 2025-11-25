@@ -48,6 +48,8 @@ export class TelemetryGateway implements OnGatewayInit {
       });
     });
     // Simulate: push random vehicle position every 2 seconds
+    // DISABLED: We are using the frontend demo initialization instead
+    /*
     setInterval(() => {
       const id = 'A1';
       const baseLat = 39.95,
@@ -82,6 +84,7 @@ export class TelemetryGateway implements OnGatewayInit {
         });
       }
     }, 2000);
+    */
   }
 
   // 手动发送车辆位置（用于位置分享）
