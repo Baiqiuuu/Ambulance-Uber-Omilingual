@@ -89,12 +89,88 @@ export default function Home() {
   const [newCoordLng, setNewCoordLng] = useState('');
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
+  
+  // New states for renaming and map picking
+  const [registerName, setRegisterName] = useState('');
+  const [isPickingLocation, setIsPickingLocation] = useState(false);
+  const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+
   const mapRef = useRef<MapRef>(null);
   const modelLoadedRef = useRef(false);
   const socketRef = useRef<any>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
   const viewModeRef = useRef<ViewMode>('user');
   
+  // Ref for A1 movement step state
+  const a1StepRef = useRef(0);
+
+  // Find A1 ID to trigger effect only when A1 is created/deleted
+  const a1Id = useMemo(() => vehicles.find(v => v.name === 'A1')?.id, [vehicles]);
+
+  // Effect to handle A1 square movement
+  useEffect(() => {
+    if (!a1Id) return;
+
+    console.log('🚑 Starting A1 square movement pattern (5s interval)...');
+    
+    // Philadelphia City Hall Center
+    const centerLat = 39.9526;
+    const centerLng = -75.1652;
+    const offset = 0.005; // Square size
+
+    const interval = setInterval(async () => {
+      const step = a1StepRef.current;
+      let newLat = centerLat;
+      let newLng = centerLng;
+
+      // Square pattern: TL -> TR -> BR -> BL
+      switch (step % 4) {
+        case 0: // Top Left
+          newLat += offset;
+          newLng -= offset;
+          break;
+        case 1: // Top Right
+          newLat += offset;
+          newLng += offset;
+          break;
+        case 2: // Bottom Right
+          newLat -= offset;
+          newLng += offset;
+          break;
+        case 3: // Bottom Left
+          newLat -= offset;
+          newLng -= offset;
+          break;
+      }
+
+      // Add randomness (jitter)
+      newLat += (Math.random() - 0.5) * 0.002;
+      newLng += (Math.random() - 0.5) * 0.002;
+
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+        await fetch(`${apiBase}/api/medical/vehicles/${a1Id}/location`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            latitude: newLat,
+            longitude: newLng,
+          }),
+        });
+      } catch (error) {
+        console.error('Failed to move A1:', error);
+      }
+
+      a1StepRef.current++;
+    }, 5000);
+
+    return () => {
+      console.log('🚑 Stopping A1 movement.');
+      clearInterval(interval);
+    };
+  }, [a1Id]);
+
   useEffect(() => {
     const wsBase = process.env.NEXT_PUBLIC_WS_BASE || 'http://localhost:4000';
     console.log('Connecting to WebSocket server:', wsBase);
@@ -116,9 +192,12 @@ export default function Home() {
       setVehicles(prev => {
         const existing = prev.find(x => x.id === v.id);
         // If position hasn't changed significantly, don't update (avoid unnecessary re-renders)
+        // BUT if name or status changed, we MUST update
         if (existing && 
             Math.abs(existing.lat - v.lat) < 0.000001 && 
-            Math.abs(existing.lng - v.lng) < 0.000001) {
+            Math.abs(existing.lng - v.lng) < 0.000001 &&
+            existing.status === v.status &&
+            existing.name === v.name) {
           return prev; // No change, return previous state
         }
         
@@ -169,6 +248,7 @@ export default function Home() {
         setTrackingInterval(null);
         setSelectedVehicle(null);
       }
+      setIsPickingLocation(false); // Reset picking mode
     }
   }, [viewMode, trackingInterval]);
 
@@ -333,51 +413,69 @@ export default function Home() {
   };
 
   // Medical mode functions
-  const registerAmbulance = useCallback(async () => {
-    if (!navigator.geolocation) {
-      alert('Your browser does not support geolocation');
-      return;
-    }
+  const registerAmbulance = useCallback(async (lat?: number, lng?: number) => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      let finalLat = lat;
+      let finalLng = lng;
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
-          const response = await fetch(`${apiBase}/api/medical/vehicles/register`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              status: 'vacant',
-            }),
-          });
-
-          const result = await response.json();
-          if (result.success) {
-            alert(`Ambulance registered successfully! ID: ${result.vehicle.id}`);
-            // Refresh vehicle list
-            const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
-            const vehiclesResult = await vehiclesResponse.json();
-            if (vehiclesResult.success) {
-              setMedicalVehicles(vehiclesResult.vehicles || []);
-            }
-          } else {
-            alert(`Failed to register ambulance: ${result.message}`);
-          }
-        } catch (error) {
-          console.error('Failed to register ambulance:', error);
-          alert('Failed to register ambulance. Please try again.');
+      // If no coords provided, try to get current location
+      if (!finalLat || !finalLng) {
+        if (!navigator.geolocation) {
+          alert('Your browser does not support geolocation');
+          return;
         }
-      },
-      (error) => {
-        console.error('Failed to get location:', error);
-        alert('Unable to get current location. Please check browser permission settings.');
+        
+        await new Promise<void>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              finalLat = position.coords.latitude;
+              finalLng = position.coords.longitude;
+              resolve();
+            },
+            (error) => {
+              console.error('Failed to get location:', error);
+              alert('Unable to get current location. Please check browser permission settings.');
+              reject(error);
+            }
+          );
+        });
       }
-    );
-  }, []);
+
+      if (finalLat && finalLng) {
+        const response = await fetch(`${apiBase}/api/medical/vehicles/register`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: registerName || undefined,
+            latitude: finalLat,
+            longitude: finalLng,
+            status: 'vacant',
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          alert(`Ambulance registered successfully! Name: ${result.vehicle.name}`);
+          setRegisterName(''); // Clear name input
+          setIsPickingLocation(false); // Exit picking mode
+          // Refresh vehicle list
+          const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+          const vehiclesResult = await vehiclesResponse.json();
+          if (vehiclesResult.success) {
+            setMedicalVehicles(vehiclesResult.vehicles || []);
+          }
+        } else {
+          alert(`Failed to register ambulance: ${result.message}`);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to register ambulance:', error);
+      // Don't alert if it was just a rejection from the geolocation promise wrapper
+    }
+  }, [registerName]);
 
   const updateVehicleLocation = useCallback(async (vehicleId: string) => {
     if (!navigator.geolocation) {
@@ -445,6 +543,36 @@ export default function Home() {
     }
   }, []);
 
+  // Update Vehicle Name
+  const updateVehicleName = useCallback(async (vehicleId: string, newName: string) => {
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      const response = await fetch(`${apiBase}/api/medical/vehicles/${vehicleId}/name`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: newName }),
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        setEditingVehicleId(null);
+        setEditName('');
+        // Refresh vehicle list
+        const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+        const vehiclesResult = await vehiclesResponse.json();
+        if (vehiclesResult.success) {
+          setMedicalVehicles(vehiclesResult.vehicles || []);
+        }
+      } else {
+        alert(`Failed to update name: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('Failed to update name:', error);
+    }
+  }, []);
+
   const startTracking = useCallback((vehicleId: string) => {
     // Stop existing tracking if any
     if (trackingInterval) {
@@ -503,6 +631,64 @@ export default function Home() {
     }
   }, [selectedVehicle, stopTracking]);
 
+  // Initialize Demo Fleet
+  const initializeDemoFleet = useCallback(async () => {
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+    
+    // Philadelphia center (City Hall)
+    const centerLat = 39.9526;
+    const centerLng = -75.1652;
+    const radius = 0.04; // Roughly 4-5km spread
+
+    // Helper to get random coordinate nearby
+    const getRandomCoord = (center: number, spread: number) => {
+      return center + (Math.random() - 0.5) * spread;
+    };
+
+    const demoVehicles = [
+      { name: 'A1', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
+      { name: 'A2', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
+      { name: 'A3', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
+    ];
+
+    // Check if they already exist to avoid duplicates
+    const existingNames = new Set(medicalVehicles.map(v => v.name));
+
+    let count = 0;
+    for (const v of demoVehicles) {
+      if (!existingNames.has(v.name)) {
+        try {
+          await fetch(`${apiBase}/api/medical/vehicles/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: v.name,
+              latitude: v.lat,
+              longitude: v.lng,
+              status: v.status
+            }),
+          });
+          count++;
+        } catch (e) {
+          console.error('Failed to seed vehicle', v.name, e);
+        }
+      }
+    }
+
+    if (count > 0) {
+      alert(`Initialized ${count} new demo vehicles (A1, A2, A3) at random locations in Philadelphia.`);
+    } else {
+      alert('Demo vehicles (A1, A2, A3) already exist.');
+    }
+    
+    // Refresh list
+    const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+    const vehiclesResult = await vehiclesResponse.json();
+    if (vehiclesResult.success) {
+      setMedicalVehicles(vehiclesResult.vehicles || []);
+    }
+  }, [medicalVehicles]);
+
   // Generate share link
   const generateShareLink = (lat: number, lng: number, message?: string) => {
     const baseUrl = window.location.origin + window.location.pathname;
@@ -543,23 +729,36 @@ export default function Home() {
 
   const pathsData = generatePaths();
 
-  // Calculate nearest ambulance distance
-  const nearestAmbulance = useMemo(() => {
+  // Calculate nearest OR tracked ambulance distance
+  // If a vehicle is selected/tracked, we show that one. Otherwise nearest available.
+  const displayedAmbulance = useMemo(() => {
     if (!clickedCoord || vehicles.length === 0) return null;
 
+    // If we have a selected vehicle being tracked (locked), find it in the current vehicles list
+    if (selectedVehicle) {
+      const tracked = vehicles.find(v => v.id === selectedVehicle.id);
+      if (tracked) {
+        const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, tracked.lat, tracked.lng);
+        return { ...tracked, distance: dist, type: 'tracked' };
+      }
+    }
+
+    // Otherwise find nearest VACANT vehicle
+    const availableVehicles = vehicles.filter(v => v.status === 'vacant');
+    
     let minDist = Infinity;
     let closest = null;
 
-    vehicles.forEach(v => {
+    availableVehicles.forEach(v => {
       const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, v.lat, v.lng);
       if (dist < minDist) {
         minDist = dist;
-        closest = { ...v, distance: dist };
+        closest = { ...v, distance: dist, type: 'nearest' };
       }
     });
 
     return closest;
-  }, [clickedCoord, vehicles]);
+  }, [clickedCoord, vehicles, selectedVehicle]);
 
   // Add 3D buildings layer helper function
   const add3DBuildings = useCallback((map: MapboxMap) => {
@@ -648,8 +847,15 @@ export default function Home() {
   
   const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
     const { lngLat } = event;
-    setClickedCoord({ lat: lngLat.lat, lng: lngLat.lng });
-  }, []);
+    
+    if (isPickingLocation) {
+      // In picking mode, register ambulance at location
+      registerAmbulance(lngLat.lat, lngLat.lng);
+    } else {
+      // Normal mode: set clicked coord for query
+      setClickedCoord({ lat: lngLat.lat, lng: lngLat.lng });
+    }
+  }, [isPickingLocation, registerAmbulance]);
 
   useEffect(() => {
     if (!clickedCoord) {
@@ -882,7 +1088,7 @@ export default function Home() {
   }
 
   return (
-    <div className="h-screen w-screen relative">
+    <div className={`h-screen w-screen relative ${isPickingLocation ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
         initialViewState={{ 
@@ -1029,6 +1235,12 @@ export default function Home() {
         <div className="text-[0.65rem] uppercase tracking-wider text-indigo-500 mb-1 font-bold">Selected Location</div>
         <div className="font-mono">Lat: {clickedCoord ? clickedCoord.lat.toFixed(5) : '--.--'}</div>
         <div className="font-mono">Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
+        {isPickingLocation && (
+          <div className="mt-2 pt-2 border-t border-slate-200">
+            <div className="text-xs font-bold text-rose-500 animate-pulse">📍 Picking Location Mode Active</div>
+            <div className="text-[10px] text-slate-500">Click on map to place ambulance</div>
+          </div>
+        )}
       </div>
       <div 
         ref={sidebarRef}
@@ -1112,28 +1324,54 @@ export default function Home() {
               <p className="text-rose-500 text-sm p-4 bg-rose-50 rounded-xl">Query failed: {nearestError}</p>
             )}
             
-            {/* Nearest Ambulance Info */}
-            {clickedCoord && nearestAmbulance && (
-              <div className="mb-3 bg-indigo-50 rounded-2xl p-3 border border-indigo-100 animate-in slide-in-from-bottom-2 duration-500">
+            {/* Nearest OR Tracked Ambulance Info */}
+            {clickedCoord && displayedAmbulance && (
+              <div className={`mb-3 rounded-2xl p-3 border animate-in slide-in-from-bottom-2 duration-500 ${
+                (displayedAmbulance as any).type === 'tracked' 
+                  ? 'bg-violet-50 border-violet-100' 
+                  : 'bg-indigo-50 border-indigo-100'
+              }`}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-lg shadow-sm">
-                      🚑
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${
+                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
+                    }`}>
+                      {(displayedAmbulance as any).type === 'tracked' ? '🎯' : '🚑'}
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Nearest Unit</p>
-                      <p className="text-xs font-bold text-indigo-900">{nearestAmbulance.name || nearestAmbulance.id.slice(0, 8)}</p>
+                      <p className={`text-[10px] font-bold uppercase tracking-wider ${
+                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                      }`}>
+                        {(displayedAmbulance as any).type === 'tracked' ? 'Tracked Unit' : 'Nearest Unit'}
+                      </p>
+                      <p className={`text-xs font-bold ${
+                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-900' : 'text-indigo-900'
+                      }`}>
+                        {displayedAmbulance.name || displayedAmbulance.id.slice(0, 8)}
+                      </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-lg font-bold text-indigo-600 leading-none">{formatDistance(nearestAmbulance.distance)}</p>
-                    <p className="text-[10px] font-medium text-indigo-400">away</p>
+                    <p className={`text-lg font-bold leading-none ${
+                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-600' : 'text-indigo-600'
+                    }`}>
+                      {formatDistance(displayedAmbulance.distance)}
+                    </p>
+                    <p className={`text-[10px] font-medium ${
+                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                    }`}>
+                      away
+                    </p>
                   </div>
                 </div>
-                <div className="w-full bg-indigo-200 h-1.5 rounded-full overflow-hidden">
+                <div className={`w-full h-1.5 rounded-full overflow-hidden ${
+                  (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-200' : 'bg-indigo-200'
+                }`}>
                   <div 
-                    className="h-full bg-indigo-500 rounded-full" 
-                    style={{ width: `${Math.max(5, 100 - Math.min(100, (nearestAmbulance.distance / 5000) * 100))}%` }}
+                    className={`h-full rounded-full transition-all duration-1000 ${
+                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-500' : 'bg-indigo-500'
+                    }`}
+                    style={{ width: `${Math.max(5, 100 - Math.min(100, (displayedAmbulance.distance / 5000) * 100))}%` }}
                   ></div>
                 </div>
               </div>
@@ -1172,7 +1410,7 @@ export default function Home() {
       {process.env.NODE_ENV === 'development' && (
         <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
           <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
-          <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => v.status === 'vacant').length})</div>
+          <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => !v.status || v.status === 'vacant').length})</div>
           {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
           <div>Coordinates: {coordinates.length}</div>
           <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
@@ -1441,7 +1679,10 @@ export default function Home() {
               <span className="text-indigo-500">🏥</span> Institution Panel
             </h3>
             <button
-              onClick={() => setShowMedicalPanel(false)}
+              onClick={() => {
+                setShowMedicalPanel(false);
+                setIsPickingLocation(false);
+              }}
               className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-all"
             >
               ✕
@@ -1449,15 +1690,47 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
-            {/* Register new ambulance */}
-            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
-              <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3">Quick Actions</h4>
+            {/* Initialize Demo Button */}
+            <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-center">
+              <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2">Demo Setup</h4>
               <button
-                onClick={registerAmbulance}
-                className="w-full px-4 py-3 bg-white text-indigo-600 rounded-xl font-bold shadow-sm border border-indigo-100 hover:bg-indigo-50 hover:border-indigo-200 transition-all flex items-center justify-center gap-2"
+                onClick={initializeDemoFleet}
+                className="w-full px-4 py-2 bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-200 transition-all"
               >
-                <span>📍</span> Register At Current Location
+                Initialize A1, A2, A3 (Philly)
               </button>
+            </div>
+
+            {/* Register new ambulance */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Register New Unit</h4>
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={registerName}
+                  onChange={(e) => setRegisterName(e.target.value)}
+                  placeholder="Ambulance Name (e.g. A4)"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => registerAmbulance()}
+                    className="flex-1 px-3 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-50 transition-all"
+                  >
+                    Use Current Loc
+                  </button>
+                  <button
+                    onClick={() => setIsPickingLocation(!isPickingLocation)}
+                    className={`flex-1 px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
+                      isPickingLocation
+                        ? 'bg-rose-500 border-rose-600 text-white animate-pulse'
+                        : 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700'
+                    }`}
+                  >
+                    {isPickingLocation ? 'Click Map...' : 'Pick on Map'}
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Vehicle list */}
@@ -1488,10 +1761,28 @@ export default function Home() {
                       }`}
                     >
                       <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <div className="font-bold text-slate-800 flex items-center gap-2">
-                            {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
-                          </div>
+                        <div className="flex-1 mr-2">
+                          {editingVehicleId === vehicle.id ? (
+                            <div className="flex gap-2 mb-1">
+                              <input
+                                type="text"
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                className="w-full px-2 py-1 text-xs border rounded"
+                                autoFocus
+                              />
+                              <button onClick={() => updateVehicleName(vehicle.id, editName)} className="text-green-600">✓</button>
+                              <button onClick={() => setEditingVehicleId(null)} className="text-red-600">✕</button>
+                            </div>
+                          ) : (
+                            <div className="font-bold text-slate-800 flex items-center gap-2 cursor-pointer hover:text-indigo-600" onClick={() => {
+                              setEditingVehicleId(vehicle.id);
+                              setEditName(vehicle.name || '');
+                            }}>
+                              {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
+                              <span className="text-[10px] text-slate-300">✎</span>
+                            </div>
+                          )}
                           <div className="text-xs font-mono text-slate-400 mt-1">
                             {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
                           </div>
