@@ -13,6 +13,7 @@
     "@react-three/fiber": "^9.4.0",
     "mapbox-gl": "^3.0.1",
     "next": "^14",
+    "openai": "^6.9.1",
     "react": "^18",
     "react-dom": "^18",
     "react-map-gl": "^7.1.7",
@@ -33,6 +34,3 @@
     "typescript": "^5"
   }
 }
-
-
-

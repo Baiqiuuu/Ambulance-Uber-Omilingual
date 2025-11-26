@@ -53,7 +53,7 @@ const MAP_STYLES: Record<MapStyle, string> = {
 
 export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>('user');
-  
+
   // Update ref when viewMode changes
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -74,7 +74,7 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const sidebarRef = useRef<HTMLDivElement>(null);
-  
+
   // Medical mode states
   const [showMedicalPanel, setShowMedicalPanel] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<MedicalVehicle | null>(null);
@@ -89,19 +89,28 @@ export default function Home() {
   const [newCoordLng, setNewCoordLng] = useState('');
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
-  
+
   // New states for renaming and map picking
   const [registerName, setRegisterName] = useState('');
   const [isPickingLocation, setIsPickingLocation] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
+  // Language detection states
+  const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
+  const [transcribedText, setTranscribedText] = useState<string | null>(null);
+  const [languageError, setLanguageError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
   const mapRef = useRef<MapRef>(null);
   const modelLoadedRef = useRef(false);
   const socketRef = useRef<any>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
   const viewModeRef = useRef<ViewMode>('user');
-  
+
   // Ref for A1 movement step state
   const a1StepRef = useRef(0);
 
@@ -113,7 +122,7 @@ export default function Home() {
     if (!a1Id) return;
 
     console.log('🚑 Starting A1 square movement pattern (5s interval)...');
-    
+
     // Philadelphia City Hall Center
     const centerLat = 39.9526;
     const centerLng = -75.1652;
@@ -176,31 +185,31 @@ export default function Home() {
     console.log('Connecting to WebSocket server:', wsBase);
     const socket = io(wsBase, { transports: ['websocket'] });
     socketRef.current = socket;
-    
+
     socket.on('connect', () => {
       console.log('WebSocket connected successfully');
     });
-    
+
     socket.on('connect_error', (error) => {
       console.error('WebSocket connection failed:', error);
     });
-    
+
     socket.on('vehicle:telemetry', (v: Vehicle) => {
       console.log('Received vehicle data:', v);
-      
+
       // Show all vehicles in both modes
       setVehicles(prev => {
         const existing = prev.find(x => x.id === v.id);
         // If position hasn't changed significantly, don't update (avoid unnecessary re-renders)
         // BUT if name or status changed, we MUST update
-        if (existing && 
-            Math.abs(existing.lat - v.lat) < 0.000001 && 
-            Math.abs(existing.lng - v.lng) < 0.000001 &&
-            existing.status === v.status &&
-            existing.name === v.name) {
+        if (existing &&
+          Math.abs(existing.lat - v.lat) < 0.000001 &&
+          Math.abs(existing.lng - v.lng) < 0.000001 &&
+          existing.status === v.status &&
+          existing.name === v.name) {
           return prev; // No change, return previous state
         }
-        
+
         const m = new Map(prev.map(x => [x.id, x]));
         m.set(v.id, v);
         const newVehicles = Array.from(m.values());
@@ -214,7 +223,7 @@ export default function Home() {
       console.log('Received shared location:', data);
       setSharedLocation(data);
     });
-    
+
     return () => {
       socket.close();
     };
@@ -258,7 +267,7 @@ export default function Home() {
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
         const map = mapRef.current?.getMap();
-        
+
         if (map && mapLoaded) {
           const center = map.getCenter();
           // Fetch AEDs within 10km radius of map center
@@ -285,7 +294,7 @@ export default function Home() {
     };
 
     fetchAEDs();
-    
+
     // Refresh AEDs when map moves (debounced)
     const map = mapRef.current?.getMap();
     if (map && mapLoaded) {
@@ -293,9 +302,9 @@ export default function Home() {
         const center = map.getCenter();
         fetchAEDs();
       };
-      
+
       map.on('moveend', handleMoveEnd);
-      
+
       return () => {
         map.off('moveend', handleMoveEnd);
       };
@@ -335,7 +344,7 @@ export default function Home() {
       const lat = params.get('lat');
       const lng = params.get('lng');
       const message = params.get('message');
-      
+
       if (lat && lng) {
         const latNum = parseFloat(lat);
         const lngNum = parseFloat(lng);
@@ -372,17 +381,17 @@ export default function Home() {
   const handleManualShare = () => {
     const lat = parseFloat(shareLat);
     const lng = parseFloat(shareLng);
-    
+
     if (isNaN(lat) || isNaN(lng)) {
       alert('Please enter valid coordinates');
       return;
     }
-    
+
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       alert('Coordinates out of valid range');
       return;
     }
-    
+
     shareLocation(lat, lng, shareMessage || undefined);
     setShowSharePanel(false);
     setShareLat('');
@@ -394,17 +403,17 @@ export default function Home() {
   const handleAddCoordinate = () => {
     const lat = parseFloat(newCoordLat);
     const lng = parseFloat(newCoordLng);
-    
+
     if (isNaN(lat) || isNaN(lng)) {
       alert('Please enter valid coordinates');
       return;
     }
-    
+
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       alert('Coordinates out of valid range');
       return;
     }
-    
+
     const newId = `COORD-${Date.now()}`;
     setCoordinates(prev => [...prev, { id: newId, lat, lng }]);
     setShowAddCoordinatePanel(false);
@@ -425,7 +434,7 @@ export default function Home() {
           alert('Your browser does not support geolocation');
           return;
         }
-        
+
         await new Promise<void>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
             (position) => {
@@ -615,12 +624,12 @@ export default function Home() {
         // Remove from local state
         setMedicalVehicles(prev => prev.filter(v => v.id !== vehicleId));
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
-        
+
         // Stop tracking if this vehicle was being tracked
         if (selectedVehicle?.id === vehicleId) {
           stopTracking();
         }
-        
+
         alert('Ambulance deleted successfully');
       } else {
         alert(`Failed to delete ambulance: ${result.message}`);
@@ -634,7 +643,7 @@ export default function Home() {
   // Initialize Demo Fleet
   const initializeDemoFleet = useCallback(async () => {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
-    
+
     // Philadelphia center (City Hall)
     const centerLat = 39.9526;
     const centerLng = -75.1652;
@@ -680,7 +689,7 @@ export default function Home() {
     } else {
       alert('Demo vehicles (A1, A2, A3) already exist.');
     }
-    
+
     // Refresh list
     const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
     const vehiclesResult = await vehiclesResponse.json();
@@ -745,7 +754,7 @@ export default function Home() {
 
     // Otherwise find nearest VACANT vehicle
     const availableVehicles = vehicles.filter(v => v.status === 'vacant');
-    
+
     let minDist = Infinity;
     let closest = null;
 
@@ -766,7 +775,7 @@ export default function Home() {
     if (map.getLayer('3d-buildings')) {
       return;
     }
-    
+
     // Add 3D buildings layer
     const layers = map.getStyle().layers;
     if (layers) {
@@ -774,7 +783,7 @@ export default function Home() {
       const labelLayerId = layers.find(
         (layer) => layer.type === 'symbol' && layer.layout && 'text-field' in layer.layout
       )?.id;
-      
+
       if (labelLayerId && map.getSource('composite')) {
         map.addLayer({
           id: '3d-buildings',
@@ -844,10 +853,10 @@ export default function Home() {
       }
     }
   }, []);
-  
+
   const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
     const { lngLat } = event;
-    
+
     if (isPickingLocation) {
       // In picking mode, register ambulance at location
       registerAmbulance(lngLat.lat, lngLat.lng);
@@ -928,15 +937,15 @@ export default function Home() {
       if (isDragging && sidebarRef.current) {
         const sidebarWidth = sidebarCollapsed ? 48 : 256;
         const sidebarHeight = sidebarRef.current.offsetHeight;
-        
+
         // Calculate new position relative to viewport
         const newLeft = e.clientX - dragStart.x;
         const newTop = e.clientY - dragStart.y;
-        
+
         // Constrain to viewport bounds
         const maxLeft = window.innerWidth - sidebarWidth - 16;
         const maxTop = window.innerHeight - Math.min(sidebarHeight, window.innerHeight * 0.7) - 16;
-        
+
         setSidebarPosition({
           x: Math.max(16, Math.min(newLeft, maxLeft)),
           y: Math.max(16, Math.min(newTop, maxTop)),
@@ -959,7 +968,7 @@ export default function Home() {
   }, [isDragging, dragStart, sidebarCollapsed]);
 
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
-  
+
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
@@ -981,7 +990,7 @@ export default function Home() {
   const toggleVehicleLock = useCallback(async () => {
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
-      
+
       if (isPositionLocked) {
         // Unlock
         const response = await fetch(`${apiBase}/api/unlock-vehicle-position`, {
@@ -1000,7 +1009,7 @@ export default function Home() {
         const currentVehicle = vehicles.length > 0 ? vehicles[0] : null;
         const lat = currentVehicle?.lat || 39.95;
         const lng = currentVehicle?.lng || -75.16;
-        
+
         const response = await fetch(`${apiBase}/api/lock-vehicle-position`, {
           method: 'POST',
           headers: {
@@ -1024,7 +1033,7 @@ export default function Home() {
     const map = mapRef.current?.getMap();
     if (map) {
       map.setStyle(MAP_STYLES[newStyle]);
-      
+
       // Listen for style load completion event
       map.once('style.load', () => {
         // Adjust view and add 3D buildings based on style
@@ -1040,7 +1049,7 @@ export default function Home() {
           }
         }
       });
-      
+
       // If style already loaded, execute directly
       if (map.isStyleLoaded()) {
         if (newStyle === 'street') {
@@ -1056,7 +1065,73 @@ export default function Home() {
     }
   }, [add3DBuildings]);
 
+  // Language detection handlers
+  const startRecording = async () => {
+    try {
+      setLanguageError(null);
+      setDetectedLanguage(null);
+      setTranscribedText(null);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        await detectLanguage(audioBlob);
+
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setLanguageError('Failed to access microphone. Please grant permission.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const detectLanguage = async (audioBlob: Blob) => {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+
+      const response = await fetch('/api/detect-language', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        setDetectedLanguage(result.language);
+        setTranscribedText(result.text);
+      } else {
+        setLanguageError(result.error || 'Failed to detect language');
+      }
+    } catch (error) {
+      console.error('Error detecting language:', error);
+      setLanguageError('Failed to detect language. Please try again.');
+    }
+  };
+
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
 
   if (!mapboxToken) {
     return (
@@ -1091,9 +1166,9 @@ export default function Home() {
     <div className={`h-screen w-screen relative ${isPickingLocation ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
-        initialViewState={{ 
-          longitude: -75.16, 
-          latitude: 39.95, 
+        initialViewState={{
+          longitude: -75.16,
+          latitude: 39.95,
           zoom: 12,
           pitch: mapStyle === 'street' ? 45 : 0,
           bearing: 0
@@ -1107,7 +1182,7 @@ export default function Home() {
         reuseMaps
       >
         {/* 3D model layer - added directly to map via useEffect */}
-        
+
         {/* Paths from vehicles and coordinates to shared location */}
         {pathsData && (
           <Source id="paths" type="geojson" data={pathsData}>
@@ -1137,28 +1212,26 @@ export default function Home() {
         {/* Vehicle markers - 2D markers for all vehicles */}
         {/* Show all vehicles in both modes */}
         {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
-            <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
-              <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
-                <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${
-                  v.status === 'on_duty' 
-                    ? 'bg-rose-500 shadow-rose-500/40' 
-                    : 'bg-slate-500 shadow-slate-500/40'
+          <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
+            <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
+              <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${v.status === 'on_duty'
+                ? 'bg-rose-500 shadow-rose-500/40'
+                : 'bg-slate-500 shadow-slate-500/40'
                 }`}>
-                  <span className="text-sm filter drop-shadow-sm">🚑</span>
-                  <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
-                </div>
-                {v.status && (
-                  <div className={`absolute -bottom-6 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shadow-sm border border-white/20 opacity-0 group-hover:opacity-100 transition-all transform translate-y-1 group-hover:translate-y-0 ${
-                     v.status === 'on_duty' 
-                     ? 'bg-rose-600 text-white' 
-                     : 'bg-slate-600 text-white'
-                  }`}>
-                    {v.status === 'on_duty' ? 'BUSY' : 'VACANT'}
-                  </div>
-                )}
+                <span className="text-sm filter drop-shadow-sm">🚑</span>
+                <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
               </div>
-            </Marker>
-          ))}
+              {v.status && (
+                <div className={`absolute -bottom-6 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shadow-sm border border-white/20 opacity-0 group-hover:opacity-100 transition-all transform translate-y-1 group-hover:translate-y-0 ${v.status === 'on_duty'
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-slate-600 text-white'
+                  }`}>
+                  {v.status === 'on_duty' ? 'BUSY' : 'VACANT'}
+                </div>
+              )}
+            </div>
+          </Marker>
+        ))}
 
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
@@ -1176,13 +1249,13 @@ export default function Home() {
               </div>
               {/* Pulse effect */}
               <div className="absolute inset-0 rounded-full bg-rose-400 opacity-0 group-hover:animate-ping"></div>
-              
+
               {/* Tooltip on hover */}
               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 w-56 bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl shadow-slate-900/10 p-4 border border-white/60 opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none z-20 scale-95 group-hover:scale-100 origin-bottom">
                 <div className="text-sm font-bold text-slate-800 mb-1">{aed.name}</div>
                 {aed.address && (
                   <div className="text-xs text-slate-500 mb-2 flex items-start gap-1">
-                    <span className="mt-0.5">📍</span> 
+                    <span className="mt-0.5">📍</span>
                     <span className="leading-tight">{aed.address}</span>
                   </div>
                 )}
@@ -1242,7 +1315,7 @@ export default function Home() {
           </div>
         )}
       </div>
-      <div 
+      <div
         ref={sidebarRef}
         className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-6 top-6' : ''}`}
         style={{
@@ -1251,7 +1324,7 @@ export default function Home() {
           right: sidebarPosition ? 'auto' : undefined,
         }}
       >
-        <div 
+        <div
           className={`${sidebarCollapsed ? 'px-0 py-4' : 'px-5 py-4'} border-b border-slate-100 cursor-move hover:bg-slate-50/50 transition-colors select-none`}
           onMouseDown={handleMouseDown}
           onClick={(e) => {
@@ -1323,54 +1396,46 @@ export default function Home() {
             {clickedCoord && nearestError && (
               <p className="text-rose-500 text-sm p-4 bg-rose-50 rounded-xl">Query failed: {nearestError}</p>
             )}
-            
+
             {/* Nearest OR Tracked Ambulance Info */}
             {clickedCoord && displayedAmbulance && (
-              <div className={`mb-3 rounded-2xl p-3 border animate-in slide-in-from-bottom-2 duration-500 ${
-                (displayedAmbulance as any).type === 'tracked' 
-                  ? 'bg-violet-50 border-violet-100' 
-                  : 'bg-indigo-50 border-indigo-100'
-              }`}>
+              <div className={`mb-3 rounded-2xl p-3 border animate-in slide-in-from-bottom-2 duration-500 ${(displayedAmbulance as any).type === 'tracked'
+                ? 'bg-violet-50 border-violet-100'
+                : 'bg-indigo-50 border-indigo-100'
+                }`}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
-                    }`}>
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
+                      }`}>
                       {(displayedAmbulance as any).type === 'tracked' ? '🎯' : '🚑'}
                     </div>
                     <div>
-                      <p className={`text-[10px] font-bold uppercase tracking-wider ${
-                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
-                      }`}>
+                      <p className={`text-[10px] font-bold uppercase tracking-wider ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                        }`}>
                         {(displayedAmbulance as any).type === 'tracked' ? 'Tracked Unit' : 'Nearest Unit'}
                       </p>
-                      <p className={`text-xs font-bold ${
-                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-900' : 'text-indigo-900'
-                      }`}>
+                      <p className={`text-xs font-bold ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-900' : 'text-indigo-900'
+                        }`}>
                         {displayedAmbulance.name || displayedAmbulance.id.slice(0, 8)}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className={`text-lg font-bold leading-none ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-600' : 'text-indigo-600'
-                    }`}>
+                    <p className={`text-lg font-bold leading-none ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-600' : 'text-indigo-600'
+                      }`}>
                       {formatDistance(displayedAmbulance.distance)}
                     </p>
-                    <p className={`text-[10px] font-medium ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
-                    }`}>
+                    <p className={`text-[10px] font-medium ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                      }`}>
                       away
                     </p>
                   </div>
                 </div>
-                <div className={`w-full h-1.5 rounded-full overflow-hidden ${
-                  (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-200' : 'bg-indigo-200'
-                }`}>
-                  <div 
-                    className={`h-full rounded-full transition-all duration-1000 ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-500' : 'bg-indigo-500'
-                    }`}
+                <div className={`w-full h-1.5 rounded-full overflow-hidden ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-200' : 'bg-indigo-200'
+                  }`}>
+                  <div
+                    className={`h-full rounded-full transition-all duration-1000 ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-500' : 'bg-indigo-500'
+                      }`}
                     style={{ width: `${Math.max(5, 100 - Math.min(100, (displayedAmbulance.distance / 5000) * 100))}%` }}
                   ></div>
                 </div>
@@ -1405,7 +1470,7 @@ export default function Home() {
           </div>
         )}
       </div>
-      
+
       {/* Debug info */}
       {process.env.NODE_ENV === 'development' && (
         <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
@@ -1425,52 +1490,48 @@ export default function Home() {
           )}
         </div>
       )}
-      
+
       {/* View mode toggle button - top left */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
         <button
           onClick={() => setViewMode(viewMode === 'user' ? 'medical' : 'user')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            viewMode === 'medical'
-              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${viewMode === 'medical'
+            ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
+            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
+            }`}
         >
           {viewMode === 'medical' ? '🏥 Medical Mode' : '👤 User Mode'}
         </button>
         {viewMode === 'user' && (
           <button
             onClick={toggleVehicleLock}
-            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-              isPositionLocked
-                ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
-                : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
-            }`}
+            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isPositionLocked
+              ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+              : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
+              }`}
           >
             {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
           </button>
         )}
       </div>
-      
+
       {/* Map style toggle buttons */}
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
         <button
           onClick={() => handleMapStyleChange('street')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            mapStyle === 'street'
-              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${mapStyle === 'street'
+            ? 'bg-indigo-600 text-white shadow-indigo-500/30'
+            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
+            }`}
         >
           🗺️ Street Map
         </button>
         <button
           onClick={() => handleMapStyleChange('satellite')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            mapStyle === 'satellite'
-              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${mapStyle === 'satellite'
+            ? 'bg-indigo-600 text-white shadow-indigo-500/30'
+            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
+            }`}
         >
           🛰️ Satellite Map
         </button>
@@ -1484,13 +1545,18 @@ export default function Home() {
         )}
         <button
           onClick={() => setShowAEDs(!showAEDs)}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            showAEDs
-              ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
-              : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${showAEDs
+            ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+            : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
+            }`}
         >
           {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
+        </button>
+        <button
+          onClick={() => setShowLanguageModal(true)}
+          className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-purple-500 text-white hover:bg-purple-600 shadow-purple-500/30"
+        >
+          🎤 Detect Language
         </button>
       </div>
 
@@ -1527,7 +1593,7 @@ export default function Home() {
               ✕
             </button>
           </div>
-          
+
           <div className="space-y-4">
             <button
               onClick={getCurrentLocation}
@@ -1535,7 +1601,7 @@ export default function Home() {
             >
               <span>📱</span> Get Current Location
             </button>
-            
+
             <div className="relative py-2">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200"></div>
@@ -1637,7 +1703,7 @@ export default function Home() {
               ✕
             </button>
           </div>
-          
+
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Latitude</label>
@@ -1721,11 +1787,10 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => setIsPickingLocation(!isPickingLocation)}
-                    className={`flex-1 px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
-                      isPickingLocation
-                        ? 'bg-rose-500 border-rose-600 text-white animate-pulse'
-                        : 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700'
-                    }`}
+                    className={`flex-1 px-3 py-2 border text-xs font-bold rounded-xl transition-all ${isPickingLocation
+                      ? 'bg-rose-500 border-rose-600 text-white animate-pulse'
+                      : 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700'
+                      }`}
                   >
                     {isPickingLocation ? 'Click Map...' : 'Pick on Map'}
                   </button>
@@ -1743,7 +1808,7 @@ export default function Home() {
                   {medicalVehicles.length} UNITS
                 </span>
               </div>
-              
+
               {medicalVehicles.length === 0 ? (
                 <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
                   <span className="text-2xl block mb-2">🚑</span>
@@ -1754,11 +1819,10 @@ export default function Home() {
                   {medicalVehicles.map(vehicle => (
                     <div
                       key={vehicle.id}
-                      className={`p-4 rounded-2xl border transition-all duration-200 ${
-                        selectedVehicle?.id === vehicle.id
-                          ? 'border-indigo-500 bg-indigo-50/50 shadow-md ring-1 ring-indigo-500/20'
-                          : 'border-slate-100 bg-white hover:border-indigo-200 hover:shadow-sm'
-                      }`}
+                      className={`p-4 rounded-2xl border transition-all duration-200 ${selectedVehicle?.id === vehicle.id
+                        ? 'border-indigo-500 bg-indigo-50/50 shadow-md ring-1 ring-indigo-500/20'
+                        : 'border-slate-100 bg-white hover:border-indigo-200 hover:shadow-sm'
+                        }`}
                     >
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex-1 mr-2">
@@ -1788,11 +1852,10 @@ export default function Home() {
                           </div>
                         </div>
                         <span
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                            vehicle.status === 'on_duty'
-                              ? 'bg-rose-100 text-rose-600'
-                              : 'bg-emerald-100 text-emerald-600'
-                          }`}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${vehicle.status === 'on_duty'
+                            ? 'bg-rose-100 text-rose-600'
+                            : 'bg-emerald-100 text-emerald-600'
+                            }`}
                         >
                           {vehicle.status === 'on_duty' ? 'BUSY' : 'READY'}
                         </span>
@@ -1812,11 +1875,10 @@ export default function Home() {
                               vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
                             )
                           }
-                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
-                            vehicle.status === 'on_duty'
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
-                              : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
-                          }`}
+                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
+                            : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                            }`}
                         >
                           {vehicle.status === 'on_duty' ? 'Set Free' : 'Set Busy'}
                         </button>
@@ -1847,6 +1909,95 @@ export default function Home() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Language Detection Modal */}
+      {showLanguageModal && (
+        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
+          <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 w-96 border border-white/60 animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                🎤 Language Detection
+              </h3>
+              <button
+                onClick={() => {
+                  setShowLanguageModal(false);
+                  if (isRecording) stopRecording();
+                }}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Recording Controls */}
+              <div className="flex flex-col items-center gap-4">
+                {!isRecording ? (
+                  <button
+                    onClick={startRecording}
+                    className="px-8 py-4 bg-purple-500 text-white rounded-full shadow-lg hover:bg-purple-600 transition-all transform hover:scale-105 active:scale-95 font-bold flex items-center gap-3"
+                  >
+                    <span className="text-2xl">🎤</span>
+                    Start Recording
+                  </button>
+                ) : (
+                  <button
+                    onClick={stopRecording}
+                    className="px-8 py-4 bg-rose-500 text-white rounded-full shadow-lg hover:bg-rose-600 transition-all transform hover:scale-105 active:scale-95 font-bold flex items-center gap-3 animate-pulse"
+                  >
+                    <span className="text-2xl">⏹️</span>
+                    Stop Recording
+                  </button>
+                )}
+
+                {isRecording && (
+                  <div className="flex items-center gap-2 text-rose-500 font-medium">
+                    <div className="w-3 h-3 bg-rose-500 rounded-full animate-pulse"></div>
+                    Recording in progress...
+                  </div>
+                )}
+              </div>
+
+              {/* Error Display */}
+              {languageError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+                  <p className="text-rose-600 text-sm font-medium">❌ {languageError}</p>
+                </div>
+              )}
+
+              {/* Results Display */}
+              {detectedLanguage && (
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-6 space-y-4">
+                  <div>
+                    <p className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-1">Detected Language</p>
+                    <p className="text-2xl font-bold text-purple-600">{detectedLanguage.toUpperCase()}</p>
+                  </div>
+
+                  {transcribedText && (
+                    <div>
+                      <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-2">Transcription</p>
+                      <p className="text-slate-700 text-sm leading-relaxed bg-white/50 rounded-lg p-3">
+                        "{transcribedText}"
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Instructions */}
+              {!detectedLanguage && !languageError && !isRecording && (
+                <div className="bg-slate-50 rounded-xl p-4">
+                  <p className="text-slate-600 text-sm text-center">
+                    Click "Start Recording" and speak in any language. The AI will detect the language and transcribe your speech.
+                  </p>
                 </div>
               )}
             </div>
