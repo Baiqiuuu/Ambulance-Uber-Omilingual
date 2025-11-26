@@ -97,13 +97,21 @@ export default function Home() {
   const [editName, setEditName] = useState('');
 
   // Language detection states
-  const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const [showLanguagePanel, setShowLanguagePanel] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null);
+  const [detectedLanguages, setDetectedLanguages] = useState<string[]>([]);
   const [transcribedText, setTranscribedText] = useState<string | null>(null);
   const [languageError, setLanguageError] = useState<string | null>(null);
+  const [isPanelMinimized, setIsPanelMinimized] = useState(false);
+  const [languagePanelPosition, setLanguagePanelPosition] = useState<{ x: number; y: number }>({ x: window.innerWidth - 420, y: 100 });
+  const [isDraggingLanguagePanel, setIsDraggingLanguagePanel] = useState(false);
+  const [languagePanelDragStart, setLanguagePanelDragStart] = useState({ x: 0, y: 0 });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const languagePanelRef = useRef<HTMLDivElement>(null);
+  const isRecordingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const mapRef = useRef<MapRef>(null);
   const modelLoadedRef = useRef(false);
@@ -1066,47 +1074,103 @@ export default function Home() {
   }, [add3DBuildings]);
 
   // Language detection handlers
+  const toggleLanguageDetection = async () => {
+    if (isRecording) {
+      // Stop recording
+      stopRecording();
+    } else if (showLanguagePanel) {
+      // Panel is open but not recording, close it
+      setShowLanguagePanel(false);
+      setIsPanelMinimized(false);
+    } else {
+      // Open panel and start recording
+      setShowLanguagePanel(true);
+      setIsPanelMinimized(false);
+      setLanguageError(null);
+      setDetectedLanguages([]);
+      setTranscribedText(null);
+      // Start recording after a brief delay to let panel open
+      setTimeout(() => startRecording(), 100);
+    }
+  };
+
   const startRecording = async () => {
     try {
       setLanguageError(null);
-      setDetectedLanguage(null);
-      setTranscribedText(null);
+      setDetectedLanguages([]);
+      setTranscribedText('');
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        await detectLanguage(audioBlob);
-
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
-      };
-
-      mediaRecorder.start();
+      streamRef.current = stream;
+      isRecordingRef.current = true;
       setIsRecording(true);
+
+      // Function to record a single short segment
+      const recordSegment = () => {
+        if (!isRecordingRef.current) {
+          // Stop stream if we're done
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          return;
+        }
+
+        const mediaRecorder = new MediaRecorder(stream);
+        const chunks: Blob[] = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+          // Process the chunk
+          if (audioBlob.size > 0) {
+            await translateAudioChunk(audioBlob);
+          }
+
+          // Start next segment immediately if still recording
+          if (isRecordingRef.current) {
+            recordSegment();
+          }
+        };
+
+        mediaRecorder.start();
+
+        // Stop this segment after 2 seconds
+        setTimeout(() => {
+          if (mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        }, 2000);
+      };
+
+      // Start the loop
+      recordSegment();
+
     } catch (error) {
       console.error('Error starting recording:', error);
       setLanguageError('Failed to access microphone. Please grant permission.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    // Stream stopping is handled in the recordSegment loop when it detects isRecordingRef is false
+    // But we can also force stop here to be sure
+    if (streamRef.current) {
+      // We don't stop tracks immediately here to let the last segment finish and save
+      // The loop will handle cleanup
     }
   };
 
-  const detectLanguage = async (audioBlob: Blob) => {
+  const translateAudioChunk = async (audioBlob: Blob) => {
     try {
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
@@ -1119,16 +1183,83 @@ export default function Home() {
       const result = await response.json();
 
       if (result.success) {
-        setDetectedLanguage(result.language);
-        setTranscribedText(result.text);
+        // Update language list if new language detected
+        if (result.language) {
+          setDetectedLanguages(prev => {
+            const newLang = result.language;
+            // Don't add if it's the same as the last one
+            if (prev.length > 0 && prev[prev.length - 1] === newLang) {
+              return prev;
+            }
+            return [...prev, newLang];
+          });
+        }
+
+        // Append new text
+        if (result.text) {
+          setTranscribedText(prev => {
+            const newText = result.text.trim();
+            if (!newText) return prev;
+            // Avoid duplicate repetition if the overlap catches same words
+            // Simple check: if prev ends with newText, don't append
+            if (prev && prev.endsWith(newText)) return prev;
+            return prev ? `${prev} ${newText}` : newText;
+          });
+        }
       } else {
-        setLanguageError(result.error || 'Failed to detect language');
+        // Silent fail for empty chunks or noise
+        // console.warn('Chunk translation failed:', result.error);
       }
     } catch (error) {
-      console.error('Error detecting language:', error);
-      setLanguageError('Failed to detect language. Please try again.');
+      console.error('Error translating chunk:', error);
     }
   };
+
+  // Panel dragging handlers
+  const handleLanguagePanelMouseDown = useCallback((e: React.MouseEvent) => {
+    if (languagePanelRef.current) {
+      e.preventDefault();
+      setIsDraggingLanguagePanel(true);
+      setLanguagePanelDragStart({
+        x: e.clientX - languagePanelPosition.x,
+        y: e.clientY - languagePanelPosition.y,
+      });
+    }
+  }, [languagePanelPosition]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingLanguagePanel && languagePanelRef.current) {
+        const panelWidth = 400;
+        const panelHeight = languagePanelRef.current.offsetHeight;
+
+        const newLeft = e.clientX - languagePanelDragStart.x;
+        const newTop = e.clientY - languagePanelDragStart.y;
+
+        // Constrain to viewport bounds
+        const maxLeft = window.innerWidth - panelWidth - 16;
+        const maxTop = window.innerHeight - panelHeight - 16;
+
+        setLanguagePanelPosition({
+          x: Math.max(16, Math.min(newLeft, maxLeft)),
+          y: Math.max(16, Math.min(newTop, maxTop)),
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingLanguagePanel(false);
+    };
+
+    if (isDraggingLanguagePanel) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDraggingLanguagePanel, languagePanelDragStart]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
 
@@ -1553,10 +1684,13 @@ export default function Home() {
           {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
         </button>
         <button
-          onClick={() => setShowLanguageModal(true)}
-          className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-purple-500 text-white hover:bg-purple-600 shadow-purple-500/30"
+          onClick={toggleLanguageDetection}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isRecording
+            ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30 animate-pulse'
+            : 'bg-purple-500 text-white hover:bg-purple-600 shadow-purple-500/30'
+            }`}
         >
-          🎤 Detect Language
+          {isRecording ? '⏹️ Stop Recording' : '🎤 Detect Language'}
         </button>
       </div>
 
@@ -1916,92 +2050,117 @@ export default function Home() {
         </div>
       )}
 
-      {/* Language Detection Modal */}
-      {showLanguageModal && (
-        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center animate-in fade-in duration-200">
-          <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl p-8 w-96 border border-white/60 animate-in zoom-in-95 duration-200">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                🎤 Language Detection
-              </h3>
+      {/* Language Detection Panel - Movable & Minimizable */}
+      {showLanguagePanel && (
+        <div
+          ref={languagePanelRef}
+          className={`absolute z-40 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 transition-all duration-200 ${isPanelMinimized ? 'w-72' : 'w-96'
+            }`}
+          style={{
+            left: languagePanelPosition.x,
+            top: languagePanelPosition.y,
+            cursor: isDraggingLanguagePanel ? 'grabbing' : 'default'
+          }}
+        >
+          {/* Header - Draggable */}
+          <div
+            className="flex justify-between items-center p-4 border-b border-slate-100 cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={handleLanguagePanelMouseDown}
+          >
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              🎤 {isPanelMinimized ? 'Language AI' : 'Language Detection'}
+            </h3>
+            <div className="flex items-center gap-1">
               <button
-                onClick={() => {
-                  setShowLanguageModal(false);
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsPanelMinimized(!isPanelMinimized);
+                }}
+                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+              >
+                {isPanelMinimized ? 'maximize' : 'minimize'}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowLanguagePanel(false);
                   if (isRecording) stopRecording();
                 }}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-full transition-all"
               >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
+          </div>
 
-            <div className="space-y-6">
-              {/* Recording Controls */}
+          {/* Content */}
+          {!isPanelMinimized && (
+            <div className="p-6 space-y-6">
+              {/* Recording Status */}
               <div className="flex flex-col items-center gap-4">
-                {!isRecording ? (
-                  <button
-                    onClick={startRecording}
-                    className="px-8 py-4 bg-purple-500 text-white rounded-full shadow-lg hover:bg-purple-600 transition-all transform hover:scale-105 active:scale-95 font-bold flex items-center gap-3"
-                  >
-                    <span className="text-2xl">🎤</span>
-                    Start Recording
-                  </button>
-                ) : (
-                  <button
-                    onClick={stopRecording}
-                    className="px-8 py-4 bg-rose-500 text-white rounded-full shadow-lg hover:bg-rose-600 transition-all transform hover:scale-105 active:scale-95 font-bold flex items-center gap-3 animate-pulse"
-                  >
-                    <span className="text-2xl">⏹️</span>
-                    Stop Recording
-                  </button>
-                )}
-
-                {isRecording && (
-                  <div className="flex items-center gap-2 text-rose-500 font-medium">
-                    <div className="w-3 h-3 bg-rose-500 rounded-full animate-pulse"></div>
-                    Recording in progress...
+                {isRecording ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-16 h-16 rounded-full bg-rose-50 flex items-center justify-center relative">
+                      <div className="absolute inset-0 rounded-full bg-rose-500 opacity-20 animate-ping"></div>
+                      <div className="w-8 h-8 rounded-full bg-rose-500 animate-pulse shadow-lg shadow-rose-500/50"></div>
+                    </div>
+                    <p className="text-rose-500 font-bold animate-pulse">Listening...</p>
+                    <p className="text-xs text-slate-400">Speak now in any language</p>
                   </div>
+                ) : (
+                  detectedLanguages.length === 0 && !languageError && (
+                    <div className="text-center py-4 text-slate-500">
+                      <p className="text-4xl mb-2">👂</p>
+                      <p className="text-sm">Ready to detect language</p>
+                    </div>
+                  )
                 )}
               </div>
 
               {/* Error Display */}
               {languageError && (
-                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
-                  <p className="text-rose-600 text-sm font-medium">❌ {languageError}</p>
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 animate-in slide-in-from-top-2">
+                  <p className="text-rose-600 text-sm font-medium flex items-center gap-2">
+                    <span>❌</span> {languageError}
+                  </p>
                 </div>
               )}
 
               {/* Results Display */}
-              {detectedLanguage && (
-                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-6 space-y-4">
-                  <div>
-                    <p className="text-xs font-bold text-purple-400 uppercase tracking-wider mb-1">Detected Language</p>
-                    <p className="text-2xl font-bold text-purple-600">{detectedLanguage.toUpperCase()}</p>
-                  </div>
+              {(detectedLanguages.length > 0 || transcribedText) && (
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-5 space-y-3 animate-in slide-in-from-bottom-4">
+                  {detectedLanguages.length > 0 && (
+                    <div className="flex justify-between items-start">
+                      <div className="w-full">
+                        <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1.5">Detected Languages</p>
+                        <div className="flex flex-wrap gap-2">
+                          {detectedLanguages.map((lang, index) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-white/60 border border-purple-100 rounded-md text-xs font-bold text-purple-600 shadow-sm"
+                            >
+                              {lang.toUpperCase()}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {transcribedText && (
-                    <div>
-                      <p className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-2">Transcription</p>
-                      <p className="text-slate-700 text-sm leading-relaxed bg-white/50 rounded-lg p-3">
+                    <div className="pt-2 border-t border-purple-100">
+                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1.5">Transcription</p>
+                      <p className="text-slate-700 text-sm leading-relaxed bg-white/60 rounded-lg p-3 font-medium">
                         "{transcribedText}"
                       </p>
                     </div>
                   )}
                 </div>
               )}
-
-              {/* Instructions */}
-              {!detectedLanguage && !languageError && !isRecording && (
-                <div className="bg-slate-50 rounded-xl p-4">
-                  <p className="text-slate-600 text-sm text-center">
-                    Click "Start Recording" and speak in any language. The AI will detect the language and transcribe your speech.
-                  </p>
-                </div>
-              )}
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

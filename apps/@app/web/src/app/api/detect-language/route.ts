@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
-    
+
     if (!apiKey || apiKey === 'YOUR_OPENAI_TOKEN') {
       return NextResponse.json(
         { error: 'OpenAI API key not configured. Please set OPENAI_API_KEY in your .env file.' },
@@ -26,8 +26,9 @@ export async function POST(request: NextRequest) {
       apiKey: apiKey,
     });
 
-    // Use Whisper API to transcribe and detect language
-    const transcription = await openai.audio.transcriptions.create({
+    // Use Whisper API to translate to English
+    // The translations endpoint always translates to English
+    const translation = await openai.audio.translations.create({
       file: audioFile,
       model: 'whisper-1',
       response_format: 'verbose_json',
@@ -35,9 +36,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      language: transcription.language,
-      text: transcription.text,
-      duration: (transcription as any).duration,
+      // Translations endpoint doesn't always return detected language in the same way
+      // But we can try to access it if available, or default to 'English (Translated)'
+      language: (translation as any).language || 'en',
+      text: translation.text,
+      duration: (translation as any).duration,
     });
   } catch (error: any) {
     console.error('Error detecting language:', error);
