@@ -1666,24 +1666,28 @@ export default function Home() {
 
       {/* Map style toggle buttons */}
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-        <button
-          onClick={() => handleMapStyleChange('street')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${mapStyle === 'street'
-            ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-            }`}
-        >
-          <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg> Street Map</span>
-        </button>
-        <button
-          onClick={() => handleMapStyleChange('satellite')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${mapStyle === 'satellite'
-            ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-            }`}
-        >
-          <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Satellite Map</span>
-        </button>
+        <div className="bg-white/90 backdrop-blur-sm p-1 rounded-full shadow-xl shadow-slate-300/30 border border-white/50 flex">
+          <button
+            onClick={() => handleMapStyleChange('street')}
+            className={`px-4 py-2 rounded-full text-sm font-bold transition-all duration-300 flex items-center gap-2 ${mapStyle === 'street'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
+              }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+            Map
+          </button>
+          <button
+            onClick={() => handleMapStyleChange('satellite')}
+            className={`px-4 py-2 rounded-full text-sm font-bold transition-all duration-300 flex items-center gap-2 ${mapStyle === 'satellite'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
+              }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            Satellite
+          </button>
+        </div>
         {viewMode === 'user' && (
           <button
             onClick={() => setShowSharePanel(!showSharePanel)}
