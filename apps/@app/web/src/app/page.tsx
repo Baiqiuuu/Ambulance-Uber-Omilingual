@@ -1349,7 +1349,7 @@ export default function Home() {
                 ? 'bg-rose-500 shadow-rose-500/40'
                 : 'bg-slate-500 shadow-slate-500/40'
                 }`}>
-                <span className="text-sm filter drop-shadow-sm">🚑</span>
+                <span className="text-sm filter drop-shadow-sm"><svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg></span>
                 <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
               </div>
               {v.status && (
@@ -1386,7 +1386,7 @@ export default function Home() {
                 <div className="text-sm font-bold text-slate-800 mb-1">{aed.name}</div>
                 {aed.address && (
                   <div className="text-xs text-slate-500 mb-2 flex items-start gap-1">
-                    <span className="mt-0.5">📍</span>
+                    <span className="mt-0.5"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></span>
                     <span className="leading-tight">{aed.address}</span>
                   </div>
                 )}
@@ -1441,7 +1441,7 @@ export default function Home() {
         <div className="font-mono">Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
         {isPickingLocation && (
           <div className="mt-2 pt-2 border-t border-slate-200">
-            <div className="text-xs font-bold text-rose-500 animate-pulse">📍 Picking Location Mode Active</div>
+            <div className="text-xs font-bold text-rose-500 animate-pulse flex items-center gap-1"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> Picking Location Mode Active</div>
             <div className="text-[10px] text-slate-500">Click on map to place ambulance</div>
           </div>
         )}
@@ -1515,7 +1515,7 @@ export default function Home() {
           <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2 text-sm scrollbar-thin scrollbar-thumb-indigo-100 scrollbar-track-transparent">
             {!clickedCoord && (
               <div className="flex flex-col items-center justify-center py-8 text-slate-400 gap-2">
-                <span className="text-2xl">🗺️</span>
+                <span className="text-2xl text-slate-300"><svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg></span>
                 <p>Click map to explore</p>
               </div>
             )}
@@ -1538,7 +1538,11 @@ export default function Home() {
                   <div className="flex items-center gap-2">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
                       }`}>
-                      {(displayedAmbulance as any).type === 'tracked' ? '🎯' : '🚑'}
+                      {(displayedAmbulance as any).type === 'tracked' ? (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      )}
                     </div>
                     <div>
                       <p className={`text-[10px] font-bold uppercase tracking-wider ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
@@ -1631,7 +1635,11 @@ export default function Home() {
             : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
             }`}
         >
-          {viewMode === 'medical' ? '🏥 Medical Mode' : '👤 User Mode'}
+          {viewMode === 'medical' ? (
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg> Medical Mode</span>
+          ) : (
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg> User Mode</span>
+          )}
         </button>
         {viewMode === 'user' && (
           <button
@@ -1641,7 +1649,17 @@ export default function Home() {
               : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
               }`}
           >
-            {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
+            {isPositionLocked ? (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                Unlock Vehicle
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
+                Lock Vehicle (Test)
+              </>
+            )}
           </button>
         )}
       </div>
@@ -1655,7 +1673,7 @@ export default function Home() {
             : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
             }`}
         >
-          🗺️ Street Map
+          <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg> Street Map</span>
         </button>
         <button
           onClick={() => handleMapStyleChange('satellite')}
@@ -1664,14 +1682,14 @@ export default function Home() {
             : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
             }`}
         >
-          🛰️ Satellite Map
+          <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> Satellite Map</span>
         </button>
         {viewMode === 'user' && (
           <button
             onClick={() => setShowSharePanel(!showSharePanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/30"
           >
-            📍 Share Location
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> Share Location</span>
           </button>
         )}
         <button
@@ -1681,7 +1699,10 @@ export default function Home() {
             : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
             }`}
         >
-          {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
+          <span className="flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+            {showAEDs ? 'Hide AEDs' : 'Show AEDs'} ({aeds.length})
+          </span>
         </button>
         <button
           onClick={toggleLanguageDetection}
@@ -1690,7 +1711,13 @@ export default function Home() {
             : 'bg-purple-500 text-white hover:bg-purple-600 shadow-purple-500/30'
             }`}
         >
-          {isRecording ? '⏹️ Stop Recording' : '🎤 Detect Language'}
+          <span className="flex items-center gap-2">
+            {isRecording ? (
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg> Stop Recording</>
+            ) : (
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Detect Language</>
+            )}
+          </span>
         </button>
       </div>
 
@@ -1701,14 +1728,16 @@ export default function Home() {
             onClick={() => setShowAddCoordinatePanel(!showAddCoordinatePanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-violet-600 text-white hover:bg-violet-700 shadow-violet-500/30 flex items-center justify-center gap-2"
           >
-            <span>➕</span> Add New Coordinate
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+            Add New Coordinate
           </button>
         ) : (
           <button
             onClick={() => setShowMedicalPanel(!showMedicalPanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30 flex items-center justify-center gap-2"
           >
-            <span>🏥</span> Medical Panel
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+            Medical Panel
           </button>
         )}
       </div>
@@ -1718,7 +1747,7 @@ export default function Home() {
         <div className="absolute top-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-emerald-500">📍</span> Share Location
+              <span className="text-emerald-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></span> Share Location
             </h3>
             <button
               onClick={() => setShowSharePanel(false)}
@@ -1733,7 +1762,7 @@ export default function Home() {
               onClick={getCurrentLocation}
               className="w-full px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
             >
-              <span>📱</span> Get Current Location
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Get Current Location
             </button>
 
             <div className="relative py-2">
@@ -1828,7 +1857,7 @@ export default function Home() {
         <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-violet-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-violet-500">➕</span> New Point
+              <span className="text-violet-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg></span> New Point
             </h3>
             <button
               onClick={() => setShowAddCoordinatePanel(false)}
@@ -1876,7 +1905,7 @@ export default function Home() {
         <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-96 max-h-[80vh] overflow-y-auto border border-white/60 animate-in slide-in-from-bottom-4 duration-300 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
           <div className="flex justify-between items-center mb-6 sticky top-0 bg-white/95 backdrop-blur-xl pb-2 z-20">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-indigo-500">🏥</span> Institution Panel
+              <span className="text-indigo-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg></span> Institution Panel
             </h3>
             <button
               onClick={() => {
@@ -1945,7 +1974,7 @@ export default function Home() {
 
               {medicalVehicles.length === 0 ? (
                 <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
-                  <span className="text-2xl block mb-2">🚑</span>
+                  <span className="text-2xl block mb-2 text-slate-400"><svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg></span>
                   <p className="text-sm text-slate-400 font-medium">No ambulances registered.</p>
                 </div>
               ) : (
@@ -1978,7 +2007,7 @@ export default function Home() {
                               setEditName(vehicle.name || '');
                             }}>
                               {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
-                              <span className="text-[10px] text-slate-300">✎</span>
+                              <span className="text-slate-300"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></span>
                             </div>
                           )}
                           <div className="text-xs font-mono text-slate-400 mt-1">
@@ -2068,7 +2097,7 @@ export default function Home() {
             onMouseDown={handleLanguagePanelMouseDown}
           >
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              🎤 {isPanelMinimized ? 'Language AI' : 'Language Detection'}
+              <span className="text-purple-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg></span> {isPanelMinimized ? 'Language AI' : 'Language Detection'}
             </h3>
             <div className="flex items-center gap-1">
               <button
@@ -2112,7 +2141,7 @@ export default function Home() {
                 ) : (
                   detectedLanguages.length === 0 && !languageError && (
                     <div className="text-center py-4 text-slate-500">
-                      <p className="text-4xl mb-2">👂</p>
+                      <span className="text-4xl block mb-2 text-slate-300"><svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg></span>
                       <p className="text-sm">Ready to detect language</p>
                     </div>
                   )
@@ -2123,7 +2152,7 @@ export default function Home() {
               {languageError && (
                 <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 animate-in slide-in-from-top-2">
                   <p className="text-rose-600 text-sm font-medium flex items-center gap-2">
-                    <span>❌</span> {languageError}
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {languageError}
                   </p>
                 </div>
               )}
