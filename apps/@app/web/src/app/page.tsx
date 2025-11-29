@@ -100,10 +100,25 @@ export default function Home() {
   const [showLanguagePanel, setShowLanguagePanel] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [detectedLanguages, setDetectedLanguages] = useState<string[]>([]);
-  const [transcribedText, setTranscribedText] = useState<string | null>(null);
+   type TranslationEntry = {
+     id: string;
+     timestamp: string;
+     originalLang: string;
+     originalText: string;
+     translatedText: string;
+   };
+
+   const [translationHistory, setTranslationHistory] = useState<TranslationEntry[]>([]);
   const [languageError, setLanguageError] = useState<string | null>(null);
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
-  const [languagePanelPosition, setLanguagePanelPosition] = useState<{ x: number; y: number }>({ x: window.innerWidth - 420, y: 100 });
+  // Initialize with a safe default, update in useEffect
+  const [languagePanelPosition, setLanguagePanelPosition] = useState<{ x: number; y: number }>({ x: 0, y: 100 });
+
+  useEffect(() => {
+    // Set initial position on client side
+    setLanguagePanelPosition({ x: window.innerWidth - 420, y: 100 });
+  }, []);
+
   const [isDraggingLanguagePanel, setIsDraggingLanguagePanel] = useState(false);
   const [languagePanelDragStart, setLanguagePanelDragStart] = useState({ x: 0, y: 0 });
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -1088,7 +1103,7 @@ export default function Home() {
       setIsPanelMinimized(false);
       setLanguageError(null);
       setDetectedLanguages([]);
-      setTranscribedText(null);
+      setTranslationHistory([]);
       // Start recording after a brief delay to let panel open
       setTimeout(() => startRecording(), 100);
     }
@@ -1098,7 +1113,7 @@ export default function Home() {
     try {
       setLanguageError(null);
       setDetectedLanguages([]);
-      setTranscribedText('');
+      setTranslationHistory([]);
 
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -1196,15 +1211,32 @@ export default function Home() {
         }
 
         // Append new text
-        if (result.text) {
-          setTranscribedText(prev => {
-            const newText = result.text.trim();
-            if (!newText) return prev;
-            // Avoid duplicate repetition if the overlap catches same words
-            // Simple check: if prev ends with newText, don't append
-            if (prev && prev.endsWith(newText)) return prev;
-            return prev ? `${prev} ${newText}` : newText;
-          });
+        if (result.input && result.output) {
+          const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const newInput = result.input.trim();
+          const newOutput = result.output.trim();
+          
+          if (newInput || newOutput) {
+            setTranslationHistory(prev => [...prev, {
+              id: Date.now().toString(),
+              timestamp,
+              originalLang: result.language,
+              originalText: newInput,
+              translatedText: newOutput
+            }]);
+          }
+        } else if (result.text) {
+          // Fallback for legacy response
+          const newText = result.text.trim();
+          if (newText) {
+             setTranslationHistory(prev => [...prev, {
+              id: Date.now().toString(),
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              originalLang: '?',
+              originalText: '',
+              translatedText: newText
+            }]);
+          }
         }
       } else {
         // Silent fail for empty chunks or noise
@@ -2162,8 +2194,8 @@ export default function Home() {
               )}
 
               {/* Results Display */}
-              {(detectedLanguages.length > 0 || transcribedText) && (
-                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-5 space-y-3 animate-in slide-in-from-bottom-4">
+              {(detectedLanguages.length > 0 || translationHistory.length > 0) && (
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 space-y-3 animate-in slide-in-from-bottom-4 max-h-[60vh] overflow-y-auto">
                   {detectedLanguages.length > 0 && (
                     <div className="flex justify-between items-start">
                       <div className="w-full">
@@ -2182,12 +2214,24 @@ export default function Home() {
                     </div>
                   )}
 
-                  {transcribedText && (
-                    <div className="pt-2 border-t border-purple-100">
-                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1.5">Transcription</p>
-                      <p className="text-slate-700 text-sm leading-relaxed bg-white/60 rounded-lg p-3 font-medium">
-                        "{transcribedText}"
-                      </p>
+                  {translationHistory.length > 0 && (
+                    <div className="pt-2 border-t border-purple-100 flex flex-col gap-3">
+                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Conversation History</p>
+                      {translationHistory.map((entry) => (
+                        <div key={entry.id} className="bg-white/80 rounded-lg p-3 shadow-sm border border-purple-50 hover:bg-white transition-colors">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-[10px] font-bold text-slate-400">{entry.timestamp}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded uppercase">{entry.originalLang}</span>
+                          </div>
+                          {entry.originalText && (
+                            <p className="text-slate-600 font-medium mb-1">{entry.originalText}</p>
+                          )}
+                          <div className="flex items-start gap-2 mt-2 pt-2 border-t border-dashed border-slate-100">
+                             <span className="text-indigo-500 mt-0.5 text-xs">➜</span>
+                             <p className="text-indigo-700 font-semibold text-sm">{entry.translatedText}</p>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

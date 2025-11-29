@@ -26,21 +26,50 @@ export async function POST(request: NextRequest) {
       apiKey: apiKey,
     });
 
-    // Use Whisper API to translate to English
-    // The translations endpoint always translates to English
-    const translation = await openai.audio.translations.create({
+    // Step 1: Transcribe audio to get original text and detected language
+    const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: 'whisper-1',
       response_format: 'verbose_json',
     });
 
+    const originalText = transcription.text;
+    const detectedLanguage = (transcription as any).language || 'en';
+    let translatedText = originalText;
+
+    // Step 2: Translate using Chat Completion for better accuracy
+    // Whisper's translation endpoint can be inconsistent for short segments
+    if (originalText && originalText.trim().length > 0) {
+      try {
+        const completion = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: [
+            { 
+              role: "system", 
+              content: "You are a precise translator. Translate the user's text into English. If the text is already English, just correct any grammar. Output ONLY the translation, no explanations." 
+            },
+            { role: "user", content: originalText }
+          ],
+          temperature: 0.3,
+        });
+        
+        if (completion.choices[0].message.content) {
+          translatedText = completion.choices[0].message.content;
+        }
+      } catch (translationError) {
+        console.error('Translation error:', translationError);
+        // Fallback to original text if translation fails
+      }
+    }
+
     return NextResponse.json({
       success: true,
-      // Translations endpoint doesn't always return detected language in the same way
-      // But we can try to access it if available, or default to 'English (Translated)'
-      language: (translation as any).language || 'en',
-      text: translation.text,
-      duration: (translation as any).duration,
+      language: detectedLanguage,
+      input: originalText,
+      output: translatedText,
+      // Keep text for backward compatibility
+      text: translatedText,
+      duration: (transcription as any).duration,
     });
   } catch (error: any) {
     console.error('Error detecting language:', error);
