@@ -52,6 +52,7 @@ Create `.env` files based on the examples:
 NEXT_PUBLIC_API_BASE=http://localhost:4000
 NEXT_PUBLIC_WS_BASE=http://localhost:4000
 NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
+OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 **`apps/@app/server/.env`**:
@@ -99,6 +100,7 @@ pnpm dev:electron
 
 - Real-time vehicle tracking via Socket.IO
 - Mapbox integration for map display
+- AI-powered language detection using OpenAI Whisper API
 - Unique dispatch constraint at database level
 - Monorepo structure for code sharing
 - Dockerized database services

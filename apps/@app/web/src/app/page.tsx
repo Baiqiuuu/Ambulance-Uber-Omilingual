@@ -53,7 +53,7 @@ const MAP_STYLES: Record<MapStyle, string> = {
 
 export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>('user');
-  
+
   // Update ref when viewMode changes
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -74,7 +74,7 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const sidebarRef = useRef<HTMLDivElement>(null);
-  
+
   // Medical mode states
   const [showMedicalPanel, setShowMedicalPanel] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<MedicalVehicle | null>(null);
@@ -89,19 +89,51 @@ export default function Home() {
   const [newCoordLng, setNewCoordLng] = useState('');
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
-  
+
   // New states for renaming and map picking
   const [registerName, setRegisterName] = useState('');
   const [isPickingLocation, setIsPickingLocation] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
 
+  // Language detection states
+  const [showLanguagePanel, setShowLanguagePanel] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [detectedLanguages, setDetectedLanguages] = useState<string[]>([]);
+   type TranslationEntry = {
+     id: string;
+     timestamp: string;
+     originalLang: string;
+     originalText: string;
+     translatedText: string;
+   };
+
+   const [translationHistory, setTranslationHistory] = useState<TranslationEntry[]>([]);
+  const [languageError, setLanguageError] = useState<string | null>(null);
+  const [isPanelMinimized, setIsPanelMinimized] = useState(false);
+  // Initialize with a safe default, update in useEffect
+  const [languagePanelPosition, setLanguagePanelPosition] = useState<{ x: number; y: number }>({ x: 0, y: 100 });
+
+  useEffect(() => {
+    // Set initial position on client side
+    setLanguagePanelPosition({ x: window.innerWidth - 420, y: 100 });
+  }, []);
+
+  const [isDraggingLanguagePanel, setIsDraggingLanguagePanel] = useState(false);
+  const [languagePanelDragStart, setLanguagePanelDragStart] = useState({ x: 0, y: 0 });
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const languagePanelRef = useRef<HTMLDivElement>(null);
+  const isRecordingRef = useRef(false);
+  const streamRef = useRef<MediaStream | null>(null);
+
   const mapRef = useRef<MapRef>(null);
   const modelLoadedRef = useRef(false);
   const socketRef = useRef<any>(null);
   const vehiclesRef = useRef<Vehicle[]>([]);
   const viewModeRef = useRef<ViewMode>('user');
-  
+
   // Ref for A1 movement step state
   const a1StepRef = useRef(0);
 
@@ -113,7 +145,7 @@ export default function Home() {
     if (!a1Id) return;
 
     console.log('🚑 Starting A1 square movement pattern (5s interval)...');
-    
+
     // Philadelphia City Hall Center
     const centerLat = 39.9526;
     const centerLng = -75.1652;
@@ -176,31 +208,31 @@ export default function Home() {
     console.log('Connecting to WebSocket server:', wsBase);
     const socket = io(wsBase, { transports: ['websocket'] });
     socketRef.current = socket;
-    
+
     socket.on('connect', () => {
       console.log('WebSocket connected successfully');
     });
-    
+
     socket.on('connect_error', (error) => {
       console.error('WebSocket connection failed:', error);
     });
-    
+
     socket.on('vehicle:telemetry', (v: Vehicle) => {
       console.log('Received vehicle data:', v);
-      
+
       // Show all vehicles in both modes
       setVehicles(prev => {
         const existing = prev.find(x => x.id === v.id);
         // If position hasn't changed significantly, don't update (avoid unnecessary re-renders)
         // BUT if name or status changed, we MUST update
-        if (existing && 
-            Math.abs(existing.lat - v.lat) < 0.000001 && 
-            Math.abs(existing.lng - v.lng) < 0.000001 &&
-            existing.status === v.status &&
-            existing.name === v.name) {
+        if (existing &&
+          Math.abs(existing.lat - v.lat) < 0.000001 &&
+          Math.abs(existing.lng - v.lng) < 0.000001 &&
+          existing.status === v.status &&
+          existing.name === v.name) {
           return prev; // No change, return previous state
         }
-        
+
         const m = new Map(prev.map(x => [x.id, x]));
         m.set(v.id, v);
         const newVehicles = Array.from(m.values());
@@ -214,7 +246,7 @@ export default function Home() {
       console.log('Received shared location:', data);
       setSharedLocation(data);
     });
-    
+
     return () => {
       socket.close();
     };
@@ -258,7 +290,7 @@ export default function Home() {
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
         const map = mapRef.current?.getMap();
-        
+
         if (map && mapLoaded) {
           const center = map.getCenter();
           // Fetch AEDs within 10km radius of map center
@@ -285,7 +317,7 @@ export default function Home() {
     };
 
     fetchAEDs();
-    
+
     // Refresh AEDs when map moves (debounced)
     const map = mapRef.current?.getMap();
     if (map && mapLoaded) {
@@ -293,9 +325,9 @@ export default function Home() {
         const center = map.getCenter();
         fetchAEDs();
       };
-      
+
       map.on('moveend', handleMoveEnd);
-      
+
       return () => {
         map.off('moveend', handleMoveEnd);
       };
@@ -335,7 +367,7 @@ export default function Home() {
       const lat = params.get('lat');
       const lng = params.get('lng');
       const message = params.get('message');
-      
+
       if (lat && lng) {
         const latNum = parseFloat(lat);
         const lngNum = parseFloat(lng);
@@ -372,17 +404,17 @@ export default function Home() {
   const handleManualShare = () => {
     const lat = parseFloat(shareLat);
     const lng = parseFloat(shareLng);
-    
+
     if (isNaN(lat) || isNaN(lng)) {
       alert('Please enter valid coordinates');
       return;
     }
-    
+
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       alert('Coordinates out of valid range');
       return;
     }
-    
+
     shareLocation(lat, lng, shareMessage || undefined);
     setShowSharePanel(false);
     setShareLat('');
@@ -394,17 +426,17 @@ export default function Home() {
   const handleAddCoordinate = () => {
     const lat = parseFloat(newCoordLat);
     const lng = parseFloat(newCoordLng);
-    
+
     if (isNaN(lat) || isNaN(lng)) {
       alert('Please enter valid coordinates');
       return;
     }
-    
+
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       alert('Coordinates out of valid range');
       return;
     }
-    
+
     const newId = `COORD-${Date.now()}`;
     setCoordinates(prev => [...prev, { id: newId, lat, lng }]);
     setShowAddCoordinatePanel(false);
@@ -425,7 +457,7 @@ export default function Home() {
           alert('Your browser does not support geolocation');
           return;
         }
-        
+
         await new Promise<void>((resolve, reject) => {
           navigator.geolocation.getCurrentPosition(
             (position) => {
@@ -615,12 +647,12 @@ export default function Home() {
         // Remove from local state
         setMedicalVehicles(prev => prev.filter(v => v.id !== vehicleId));
         setVehicles(prev => prev.filter(v => v.id !== vehicleId));
-        
+
         // Stop tracking if this vehicle was being tracked
         if (selectedVehicle?.id === vehicleId) {
           stopTracking();
         }
-        
+
         alert('Ambulance deleted successfully');
       } else {
         alert(`Failed to delete ambulance: ${result.message}`);
@@ -634,7 +666,7 @@ export default function Home() {
   // Initialize Demo Fleet
   const initializeDemoFleet = useCallback(async () => {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
-    
+
     // Philadelphia center (City Hall)
     const centerLat = 39.9526;
     const centerLng = -75.1652;
@@ -680,7 +712,7 @@ export default function Home() {
     } else {
       alert('Demo vehicles (A1, A2, A3) already exist.');
     }
-    
+
     // Refresh list
     const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
     const vehiclesResult = await vehiclesResponse.json();
@@ -745,7 +777,7 @@ export default function Home() {
 
     // Otherwise find nearest VACANT vehicle
     const availableVehicles = vehicles.filter(v => v.status === 'vacant');
-    
+
     let minDist = Infinity;
     let closest = null;
 
@@ -766,7 +798,7 @@ export default function Home() {
     if (map.getLayer('3d-buildings')) {
       return;
     }
-    
+
     // Add 3D buildings layer
     const layers = map.getStyle().layers;
     if (layers) {
@@ -774,7 +806,7 @@ export default function Home() {
       const labelLayerId = layers.find(
         (layer) => layer.type === 'symbol' && layer.layout && 'text-field' in layer.layout
       )?.id;
-      
+
       if (labelLayerId && map.getSource('composite')) {
         map.addLayer({
           id: '3d-buildings',
@@ -844,10 +876,10 @@ export default function Home() {
       }
     }
   }, []);
-  
+
   const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
     const { lngLat } = event;
-    
+
     if (isPickingLocation) {
       // In picking mode, register ambulance at location
       registerAmbulance(lngLat.lat, lngLat.lng);
@@ -928,15 +960,15 @@ export default function Home() {
       if (isDragging && sidebarRef.current) {
         const sidebarWidth = sidebarCollapsed ? 48 : 256;
         const sidebarHeight = sidebarRef.current.offsetHeight;
-        
+
         // Calculate new position relative to viewport
         const newLeft = e.clientX - dragStart.x;
         const newTop = e.clientY - dragStart.y;
-        
+
         // Constrain to viewport bounds
         const maxLeft = window.innerWidth - sidebarWidth - 16;
         const maxTop = window.innerHeight - Math.min(sidebarHeight, window.innerHeight * 0.7) - 16;
-        
+
         setSidebarPosition({
           x: Math.max(16, Math.min(newLeft, maxLeft)),
           y: Math.max(16, Math.min(newTop, maxTop)),
@@ -959,7 +991,7 @@ export default function Home() {
   }, [isDragging, dragStart, sidebarCollapsed]);
 
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
-  
+
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
@@ -981,7 +1013,7 @@ export default function Home() {
   const toggleVehicleLock = useCallback(async () => {
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
-      
+
       if (isPositionLocked) {
         // Unlock
         const response = await fetch(`${apiBase}/api/unlock-vehicle-position`, {
@@ -1000,7 +1032,7 @@ export default function Home() {
         const currentVehicle = vehicles.length > 0 ? vehicles[0] : null;
         const lat = currentVehicle?.lat || 39.95;
         const lng = currentVehicle?.lng || -75.16;
-        
+
         const response = await fetch(`${apiBase}/api/lock-vehicle-position`, {
           method: 'POST',
           headers: {
@@ -1024,7 +1056,7 @@ export default function Home() {
     const map = mapRef.current?.getMap();
     if (map) {
       map.setStyle(MAP_STYLES[newStyle]);
-      
+
       // Listen for style load completion event
       map.once('style.load', () => {
         // Adjust view and add 3D buildings based on style
@@ -1040,7 +1072,7 @@ export default function Home() {
           }
         }
       });
-      
+
       // If style already loaded, execute directly
       if (map.isStyleLoaded()) {
         if (newStyle === 'street') {
@@ -1056,7 +1088,213 @@ export default function Home() {
     }
   }, [add3DBuildings]);
 
+  // Language detection handlers
+  const toggleLanguageDetection = async () => {
+    if (isRecording) {
+      // Stop recording
+      stopRecording();
+    } else if (showLanguagePanel) {
+      // Panel is open but not recording, close it
+      setShowLanguagePanel(false);
+      setIsPanelMinimized(false);
+    } else {
+      // Open panel and start recording
+      setShowLanguagePanel(true);
+      setIsPanelMinimized(false);
+      setLanguageError(null);
+      setDetectedLanguages([]);
+      setTranslationHistory([]);
+      // Start recording after a brief delay to let panel open
+      setTimeout(() => startRecording(), 100);
+    }
+  };
+
+  const startRecording = async () => {
+    try {
+      setLanguageError(null);
+      setDetectedLanguages([]);
+      setTranslationHistory([]);
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      isRecordingRef.current = true;
+      setIsRecording(true);
+
+      // Function to record a single short segment
+      const recordSegment = () => {
+        if (!isRecordingRef.current) {
+          // Stop stream if we're done
+          if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+          }
+          return;
+        }
+
+        const mediaRecorder = new MediaRecorder(stream);
+        const chunks: Blob[] = [];
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            chunks.push(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+          // Process the chunk
+          if (audioBlob.size > 0) {
+            await translateAudioChunk(audioBlob);
+          }
+
+          // Start next segment immediately if still recording
+          if (isRecordingRef.current) {
+            recordSegment();
+          }
+        };
+
+        mediaRecorder.start();
+
+        // Stop this segment after 2 seconds
+        setTimeout(() => {
+          if (mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+          }
+        }, 2000);
+      };
+
+      // Start the loop
+      recordSegment();
+
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setLanguageError('Failed to access microphone. Please grant permission.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
+    }
+  };
+
+  const stopRecording = () => {
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    // Stream stopping is handled in the recordSegment loop when it detects isRecordingRef is false
+    // But we can also force stop here to be sure
+    if (streamRef.current) {
+      // We don't stop tracks immediately here to let the last segment finish and save
+      // The loop will handle cleanup
+    }
+  };
+
+  const translateAudioChunk = async (audioBlob: Blob) => {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+
+      const response = await fetch('/api/detect-language', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Update language list if new language detected
+        if (result.language) {
+          setDetectedLanguages(prev => {
+            const newLang = result.language;
+            // Don't add if it's the same as the last one
+            if (prev.length > 0 && prev[prev.length - 1] === newLang) {
+              return prev;
+            }
+            return [...prev, newLang];
+          });
+        }
+
+        // Append new text
+        if (result.input && result.output) {
+          const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const newInput = result.input.trim();
+          const newOutput = result.output.trim();
+          
+          if (newInput || newOutput) {
+            setTranslationHistory(prev => [...prev, {
+              id: Date.now().toString(),
+              timestamp,
+              originalLang: result.language,
+              originalText: newInput,
+              translatedText: newOutput
+            }]);
+          }
+        } else if (result.text) {
+          // Fallback for legacy response
+          const newText = result.text.trim();
+          if (newText) {
+             setTranslationHistory(prev => [...prev, {
+              id: Date.now().toString(),
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              originalLang: '?',
+              originalText: '',
+              translatedText: newText
+            }]);
+          }
+        }
+      } else {
+        // Silent fail for empty chunks or noise
+        // console.warn('Chunk translation failed:', result.error);
+      }
+    } catch (error) {
+      console.error('Error translating chunk:', error);
+    }
+  };
+
+  // Panel dragging handlers
+  const handleLanguagePanelMouseDown = useCallback((e: React.MouseEvent) => {
+    if (languagePanelRef.current) {
+      e.preventDefault();
+      setIsDraggingLanguagePanel(true);
+      setLanguagePanelDragStart({
+        x: e.clientX - languagePanelPosition.x,
+        y: e.clientY - languagePanelPosition.y,
+      });
+    }
+  }, [languagePanelPosition]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingLanguagePanel && languagePanelRef.current) {
+        const panelWidth = 400;
+        const panelHeight = languagePanelRef.current.offsetHeight;
+
+        const newLeft = e.clientX - languagePanelDragStart.x;
+        const newTop = e.clientY - languagePanelDragStart.y;
+
+        // Constrain to viewport bounds
+        const maxLeft = window.innerWidth - panelWidth - 16;
+        const maxTop = window.innerHeight - panelHeight - 16;
+
+        setLanguagePanelPosition({
+          x: Math.max(16, Math.min(newLeft, maxLeft)),
+          y: Math.max(16, Math.min(newTop, maxTop)),
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingLanguagePanel(false);
+    };
+
+    if (isDraggingLanguagePanel) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDraggingLanguagePanel, languagePanelDragStart]);
+
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+
 
   if (!mapboxToken) {
     return (
@@ -1091,9 +1329,9 @@ export default function Home() {
     <div className={`h-screen w-screen relative ${isPickingLocation ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
-        initialViewState={{ 
-          longitude: -75.16, 
-          latitude: 39.95, 
+        initialViewState={{
+          longitude: -75.16,
+          latitude: 39.95,
           zoom: 12,
           pitch: mapStyle === 'street' ? 45 : 0,
           bearing: 0
@@ -1107,7 +1345,7 @@ export default function Home() {
         reuseMaps
       >
         {/* 3D model layer - added directly to map via useEffect */}
-        
+
         {/* Paths from vehicles and coordinates to shared location */}
         {pathsData && (
           <Source id="paths" type="geojson" data={pathsData}>
@@ -1137,28 +1375,26 @@ export default function Home() {
         {/* Vehicle markers - 2D markers for all vehicles */}
         {/* Show all vehicles in both modes */}
         {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
-            <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
-              <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
-                <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${
-                  v.status === 'on_duty' 
-                    ? 'bg-rose-500 shadow-rose-500/40' 
-                    : 'bg-slate-500 shadow-slate-500/40'
+          <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
+            <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
+              <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${v.status === 'on_duty'
+                ? 'bg-rose-500 shadow-rose-500/40'
+                : 'bg-slate-500 shadow-slate-500/40'
                 }`}>
-                  <span className="text-sm filter drop-shadow-sm">🚑</span>
-                  <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
-                </div>
-                {v.status && (
-                  <div className={`absolute -bottom-6 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shadow-sm border border-white/20 opacity-0 group-hover:opacity-100 transition-all transform translate-y-1 group-hover:translate-y-0 ${
-                     v.status === 'on_duty' 
-                     ? 'bg-rose-600 text-white' 
-                     : 'bg-slate-600 text-white'
-                  }`}>
-                    {v.status === 'on_duty' ? 'BUSY' : 'VACANT'}
-                  </div>
-                )}
+                <span className="text-sm filter drop-shadow-sm"><svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg></span>
+                <span className="text-white text-xs font-bold tracking-wide">{v.name || v.id.slice(0, 8)}</span>
               </div>
-            </Marker>
-          ))}
+              {v.status && (
+                <div className={`absolute -bottom-6 px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shadow-sm border border-white/20 opacity-0 group-hover:opacity-100 transition-all transform translate-y-1 group-hover:translate-y-0 ${v.status === 'on_duty'
+                  ? 'bg-rose-600 text-white'
+                  : 'bg-slate-600 text-white'
+                  }`}>
+                  {v.status === 'on_duty' ? 'BUSY' : 'VACANT'}
+                </div>
+              )}
+            </div>
+          </Marker>
+        ))}
 
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
@@ -1176,13 +1412,13 @@ export default function Home() {
               </div>
               {/* Pulse effect */}
               <div className="absolute inset-0 rounded-full bg-rose-400 opacity-0 group-hover:animate-ping"></div>
-              
+
               {/* Tooltip on hover */}
               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 w-56 bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl shadow-slate-900/10 p-4 border border-white/60 opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none z-20 scale-95 group-hover:scale-100 origin-bottom">
                 <div className="text-sm font-bold text-slate-800 mb-1">{aed.name}</div>
                 {aed.address && (
                   <div className="text-xs text-slate-500 mb-2 flex items-start gap-1">
-                    <span className="mt-0.5">📍</span> 
+                    <span className="mt-0.5"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></span>
                     <span className="leading-tight">{aed.address}</span>
                   </div>
                 )}
@@ -1237,12 +1473,12 @@ export default function Home() {
         <div className="font-mono">Lng: {clickedCoord ? clickedCoord.lng.toFixed(5) : '--.--'}</div>
         {isPickingLocation && (
           <div className="mt-2 pt-2 border-t border-slate-200">
-            <div className="text-xs font-bold text-rose-500 animate-pulse">📍 Picking Location Mode Active</div>
+            <div className="text-xs font-bold text-rose-500 animate-pulse flex items-center gap-1"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> Picking Location Mode Active</div>
             <div className="text-[10px] text-slate-500">Click on map to place ambulance</div>
           </div>
         )}
       </div>
-      <div 
+      <div
         ref={sidebarRef}
         className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-6 top-6' : ''}`}
         style={{
@@ -1251,7 +1487,7 @@ export default function Home() {
           right: sidebarPosition ? 'auto' : undefined,
         }}
       >
-        <div 
+        <div
           className={`${sidebarCollapsed ? 'px-0 py-4' : 'px-5 py-4'} border-b border-slate-100 cursor-move hover:bg-slate-50/50 transition-colors select-none`}
           onMouseDown={handleMouseDown}
           onClick={(e) => {
@@ -1311,7 +1547,7 @@ export default function Home() {
           <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2 text-sm scrollbar-thin scrollbar-thumb-indigo-100 scrollbar-track-transparent">
             {!clickedCoord && (
               <div className="flex flex-col items-center justify-center py-8 text-slate-400 gap-2">
-                <span className="text-2xl">🗺️</span>
+                <span className="text-2xl text-slate-300"><svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg></span>
                 <p>Click map to explore</p>
               </div>
             )}
@@ -1323,54 +1559,50 @@ export default function Home() {
             {clickedCoord && nearestError && (
               <p className="text-rose-500 text-sm p-4 bg-rose-50 rounded-xl">Query failed: {nearestError}</p>
             )}
-            
+
             {/* Nearest OR Tracked Ambulance Info */}
             {clickedCoord && displayedAmbulance && (
-              <div className={`mb-3 rounded-2xl p-3 border animate-in slide-in-from-bottom-2 duration-500 ${
-                (displayedAmbulance as any).type === 'tracked' 
-                  ? 'bg-violet-50 border-violet-100' 
-                  : 'bg-indigo-50 border-indigo-100'
-              }`}>
+              <div className={`mb-3 rounded-2xl p-3 border animate-in slide-in-from-bottom-2 duration-500 ${(displayedAmbulance as any).type === 'tracked'
+                ? 'bg-violet-50 border-violet-100'
+                : 'bg-indigo-50 border-indigo-100'
+                }`}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
-                    }`}>
-                      {(displayedAmbulance as any).type === 'tracked' ? '🎯' : '🚑'}
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-lg shadow-sm ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-100' : 'bg-indigo-100'
+                      }`}>
+                      {(displayedAmbulance as any).type === 'tracked' ? (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      ) : (
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+                      )}
                     </div>
                     <div>
-                      <p className={`text-[10px] font-bold uppercase tracking-wider ${
-                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
-                      }`}>
+                      <p className={`text-[10px] font-bold uppercase tracking-wider ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                        }`}>
                         {(displayedAmbulance as any).type === 'tracked' ? 'Tracked Unit' : 'Nearest Unit'}
                       </p>
-                      <p className={`text-xs font-bold ${
-                        (displayedAmbulance as any).type === 'tracked' ? 'text-violet-900' : 'text-indigo-900'
-                      }`}>
+                      <p className={`text-xs font-bold ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-900' : 'text-indigo-900'
+                        }`}>
                         {displayedAmbulance.name || displayedAmbulance.id.slice(0, 8)}
                       </p>
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className={`text-lg font-bold leading-none ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-600' : 'text-indigo-600'
-                    }`}>
+                    <p className={`text-lg font-bold leading-none ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-600' : 'text-indigo-600'
+                      }`}>
                       {formatDistance(displayedAmbulance.distance)}
                     </p>
-                    <p className={`text-[10px] font-medium ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
-                    }`}>
+                    <p className={`text-[10px] font-medium ${(displayedAmbulance as any).type === 'tracked' ? 'text-violet-400' : 'text-indigo-400'
+                      }`}>
                       away
                     </p>
                   </div>
                 </div>
-                <div className={`w-full h-1.5 rounded-full overflow-hidden ${
-                  (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-200' : 'bg-indigo-200'
-                }`}>
-                  <div 
-                    className={`h-full rounded-full transition-all duration-1000 ${
-                      (displayedAmbulance as any).type === 'tracked' ? 'bg-violet-500' : 'bg-indigo-500'
-                    }`}
+                <div className={`w-full h-1.5 rounded-full overflow-hidden ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-200' : 'bg-indigo-200'
+                  }`}>
+                  <div
+                    className={`h-full rounded-full transition-all duration-1000 ${(displayedAmbulance as any).type === 'tracked' ? 'bg-violet-500' : 'bg-indigo-500'
+                      }`}
                     style={{ width: `${Math.max(5, 100 - Math.min(100, (displayedAmbulance.distance / 5000) * 100))}%` }}
                   ></div>
                 </div>
@@ -1405,7 +1637,7 @@ export default function Home() {
           </div>
         )}
       </div>
-      
+
       {/* Debug info */}
       {process.env.NODE_ENV === 'development' && (
         <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
@@ -1425,72 +1657,103 @@ export default function Home() {
           )}
         </div>
       )}
-      
+
       {/* View mode toggle button - top left */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
         <button
           onClick={() => setViewMode(viewMode === 'user' ? 'medical' : 'user')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            viewMode === 'medical'
-              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${viewMode === 'medical'
+            ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
+            : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
+            }`}
         >
-          {viewMode === 'medical' ? '🏥 Medical Mode' : '👤 User Mode'}
+          {viewMode === 'medical' ? (
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg> Medical Mode</span>
+          ) : (
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg> User Mode</span>
+          )}
         </button>
         {viewMode === 'user' && (
           <button
             onClick={toggleVehicleLock}
-            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-              isPositionLocked
-                ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
-                : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
-            }`}
+            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isPositionLocked
+              ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+              : 'bg-amber-400 text-white hover:bg-amber-500 shadow-amber-400/30'
+              }`}
           >
-            {isPositionLocked ? '🔒 Unlock Vehicle' : '🔓 Lock Vehicle (Test)'}
+            {isPositionLocked ? (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                Unlock Vehicle
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" /></svg>
+                Lock Vehicle (Test)
+              </>
+            )}
           </button>
         )}
       </div>
-      
+
       {/* Map style toggle buttons */}
       <div className="absolute top-4 right-4 z-10 flex flex-col gap-2">
-        <button
-          onClick={() => handleMapStyleChange('street')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            mapStyle === 'street'
-              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
-        >
-          🗺️ Street Map
-        </button>
-        <button
-          onClick={() => handleMapStyleChange('satellite')}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            mapStyle === 'satellite'
-              ? 'bg-indigo-600 text-white shadow-indigo-500/30'
-              : 'bg-white/90 text-slate-700 hover:bg-white hover:text-indigo-600 shadow-slate-300/30'
-          }`}
-        >
-          🛰️ Satellite Map
-        </button>
+        <div className="bg-white/90 backdrop-blur-sm p-1 rounded-full shadow-xl shadow-slate-300/30 border border-white/50 flex">
+          <button
+            onClick={() => handleMapStyleChange('street')}
+            className={`px-4 py-2 rounded-full text-sm font-bold transition-all duration-300 flex items-center gap-2 ${mapStyle === 'street'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
+              }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+            Map
+          </button>
+          <button
+            onClick={() => handleMapStyleChange('satellite')}
+            className={`px-4 py-2 rounded-full text-sm font-bold transition-all duration-300 flex items-center gap-2 ${mapStyle === 'satellite'
+              ? 'bg-indigo-600 text-white shadow-md'
+              : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100/50'
+              }`}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            Satellite
+          </button>
+        </div>
         {viewMode === 'user' && (
           <button
             onClick={() => setShowSharePanel(!showSharePanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/30"
           >
-            📍 Share Location
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> Share Location</span>
           </button>
         )}
         <button
           onClick={() => setShowAEDs(!showAEDs)}
-          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${
-            showAEDs
-              ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
-              : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
-          }`}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${showAEDs
+            ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30'
+            : 'bg-slate-200 text-slate-500 hover:bg-slate-300 shadow-slate-300/30'
+            }`}
         >
-          {showAEDs ? '❤️ Hide AEDs' : '❤️ Show AEDs'} ({aeds.length})
+          <span className="flex items-center gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+            {showAEDs ? 'Hide AEDs' : 'Show AEDs'} ({aeds.length})
+          </span>
+        </button>
+        <button
+          onClick={toggleLanguageDetection}
+          className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isRecording
+            ? 'bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30 animate-pulse'
+            : 'bg-purple-500 text-white hover:bg-purple-600 shadow-purple-500/30'
+            }`}
+        >
+          <span className="flex items-center gap-2">
+            {isRecording ? (
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg> Stop Recording</>
+            ) : (
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Detect Language</>
+            )}
+          </span>
         </button>
       </div>
 
@@ -1501,14 +1764,16 @@ export default function Home() {
             onClick={() => setShowAddCoordinatePanel(!showAddCoordinatePanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-violet-600 text-white hover:bg-violet-700 shadow-violet-500/30 flex items-center justify-center gap-2"
           >
-            <span>➕</span> Add New Coordinate
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg>
+            Add New Coordinate
           </button>
         ) : (
           <button
             onClick={() => setShowMedicalPanel(!showMedicalPanel)}
             className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30 flex items-center justify-center gap-2"
           >
-            <span>🏥</span> Medical Panel
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+            Medical Panel
           </button>
         )}
       </div>
@@ -1518,7 +1783,7 @@ export default function Home() {
         <div className="absolute top-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-emerald-500">📍</span> Share Location
+              <span className="text-emerald-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></span> Share Location
             </h3>
             <button
               onClick={() => setShowSharePanel(false)}
@@ -1527,15 +1792,15 @@ export default function Home() {
               ✕
             </button>
           </div>
-          
+
           <div className="space-y-4">
             <button
               onClick={getCurrentLocation}
               className="w-full px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
             >
-              <span>📱</span> Get Current Location
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Get Current Location
             </button>
-            
+
             <div className="relative py-2">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200"></div>
@@ -1628,7 +1893,7 @@ export default function Home() {
         <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-violet-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-violet-500">➕</span> New Point
+              <span className="text-violet-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" /></svg></span> New Point
             </h3>
             <button
               onClick={() => setShowAddCoordinatePanel(false)}
@@ -1637,7 +1902,7 @@ export default function Home() {
               ✕
             </button>
           </div>
-          
+
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Latitude</label>
@@ -1676,7 +1941,7 @@ export default function Home() {
         <div className="absolute bottom-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-96 max-h-[80vh] overflow-y-auto border border-white/60 animate-in slide-in-from-bottom-4 duration-300 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
           <div className="flex justify-between items-center mb-6 sticky top-0 bg-white/95 backdrop-blur-xl pb-2 z-20">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-indigo-500">🏥</span> Institution Panel
+              <span className="text-indigo-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg></span> Institution Panel
             </h3>
             <button
               onClick={() => {
@@ -1721,11 +1986,10 @@ export default function Home() {
                   </button>
                   <button
                     onClick={() => setIsPickingLocation(!isPickingLocation)}
-                    className={`flex-1 px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
-                      isPickingLocation
-                        ? 'bg-rose-500 border-rose-600 text-white animate-pulse'
-                        : 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700'
-                    }`}
+                    className={`flex-1 px-3 py-2 border text-xs font-bold rounded-xl transition-all ${isPickingLocation
+                      ? 'bg-rose-500 border-rose-600 text-white animate-pulse'
+                      : 'bg-indigo-600 border-indigo-700 text-white hover:bg-indigo-700'
+                      }`}
                   >
                     {isPickingLocation ? 'Click Map...' : 'Pick on Map'}
                   </button>
@@ -1743,10 +2007,10 @@ export default function Home() {
                   {medicalVehicles.length} UNITS
                 </span>
               </div>
-              
+
               {medicalVehicles.length === 0 ? (
                 <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100 border-dashed">
-                  <span className="text-2xl block mb-2">🚑</span>
+                  <span className="text-2xl block mb-2 text-slate-400"><svg className="w-8 h-8 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg></span>
                   <p className="text-sm text-slate-400 font-medium">No ambulances registered.</p>
                 </div>
               ) : (
@@ -1754,11 +2018,10 @@ export default function Home() {
                   {medicalVehicles.map(vehicle => (
                     <div
                       key={vehicle.id}
-                      className={`p-4 rounded-2xl border transition-all duration-200 ${
-                        selectedVehicle?.id === vehicle.id
-                          ? 'border-indigo-500 bg-indigo-50/50 shadow-md ring-1 ring-indigo-500/20'
-                          : 'border-slate-100 bg-white hover:border-indigo-200 hover:shadow-sm'
-                      }`}
+                      className={`p-4 rounded-2xl border transition-all duration-200 ${selectedVehicle?.id === vehicle.id
+                        ? 'border-indigo-500 bg-indigo-50/50 shadow-md ring-1 ring-indigo-500/20'
+                        : 'border-slate-100 bg-white hover:border-indigo-200 hover:shadow-sm'
+                        }`}
                     >
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex-1 mr-2">
@@ -1780,7 +2043,7 @@ export default function Home() {
                               setEditName(vehicle.name || '');
                             }}>
                               {vehicle.name || `Vehicle ${vehicle.id.slice(0, 8)}`}
-                              <span className="text-[10px] text-slate-300">✎</span>
+                              <span className="text-slate-300"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></span>
                             </div>
                           )}
                           <div className="text-xs font-mono text-slate-400 mt-1">
@@ -1788,11 +2051,10 @@ export default function Home() {
                           </div>
                         </div>
                         <span
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${
-                            vehicle.status === 'on_duty'
-                              ? 'bg-rose-100 text-rose-600'
-                              : 'bg-emerald-100 text-emerald-600'
-                          }`}
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wide ${vehicle.status === 'on_duty'
+                            ? 'bg-rose-100 text-rose-600'
+                            : 'bg-emerald-100 text-emerald-600'
+                            }`}
                         >
                           {vehicle.status === 'on_duty' ? 'BUSY' : 'READY'}
                         </span>
@@ -1812,11 +2074,10 @@ export default function Home() {
                               vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
                             )
                           }
-                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${
-                            vehicle.status === 'on_duty'
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
-                              : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
-                          }`}
+                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
+                            : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                            }`}
                         >
                           {vehicle.status === 'on_duty' ? 'Set Free' : 'Set Busy'}
                         </button>
@@ -1851,6 +2112,132 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Language Detection Panel - Movable & Minimizable */}
+      {showLanguagePanel && (
+        <div
+          ref={languagePanelRef}
+          className={`absolute z-40 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/60 transition-all duration-200 ${isPanelMinimized ? 'w-72' : 'w-96'
+            }`}
+          style={{
+            left: languagePanelPosition.x,
+            top: languagePanelPosition.y,
+            cursor: isDraggingLanguagePanel ? 'grabbing' : 'default'
+          }}
+        >
+          {/* Header - Draggable */}
+          <div
+            className="flex justify-between items-center p-4 border-b border-slate-100 cursor-grab active:cursor-grabbing select-none"
+            onMouseDown={handleLanguagePanelMouseDown}
+          >
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <span className="text-purple-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg></span> {isPanelMinimized ? 'Language AI' : 'Language Detection'}
+            </h3>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsPanelMinimized(!isPanelMinimized);
+                }}
+                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+              >
+                {isPanelMinimized ? 'maximize' : 'minimize'}
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowLanguagePanel(false);
+                  if (isRecording) stopRecording();
+                }}
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-full transition-all"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Content */}
+          {!isPanelMinimized && (
+            <div className="p-6 space-y-6">
+              {/* Recording Status */}
+              <div className="flex flex-col items-center gap-4">
+                {isRecording ? (
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="w-16 h-16 rounded-full bg-rose-50 flex items-center justify-center relative">
+                      <div className="absolute inset-0 rounded-full bg-rose-500 opacity-20 animate-ping"></div>
+                      <div className="w-8 h-8 rounded-full bg-rose-500 animate-pulse shadow-lg shadow-rose-500/50"></div>
+                    </div>
+                    <p className="text-rose-500 font-bold animate-pulse">Listening...</p>
+                    <p className="text-xs text-slate-400">Speak now in any language</p>
+                  </div>
+                ) : (
+                  detectedLanguages.length === 0 && !languageError && (
+                    <div className="text-center py-4 text-slate-500">
+                      <span className="text-4xl block mb-2 text-slate-300"><svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg></span>
+                      <p className="text-sm">Ready to detect language</p>
+                    </div>
+                  )
+                )}
+              </div>
+
+              {/* Error Display */}
+              {languageError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 animate-in slide-in-from-top-2">
+                  <p className="text-rose-600 text-sm font-medium flex items-center gap-2">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {languageError}
+                  </p>
+                </div>
+              )}
+
+              {/* Results Display */}
+              {(detectedLanguages.length > 0 || translationHistory.length > 0) && (
+                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 border border-purple-200 rounded-xl p-4 space-y-3 animate-in slide-in-from-bottom-4 max-h-[60vh] overflow-y-auto">
+                  {detectedLanguages.length > 0 && (
+                    <div className="flex justify-between items-start">
+                      <div className="w-full">
+                        <p className="text-[10px] font-bold text-purple-400 uppercase tracking-wider mb-1.5">Detected Languages</p>
+                        <div className="flex flex-wrap gap-2">
+                          {detectedLanguages.map((lang, index) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 bg-white/60 border border-purple-100 rounded-md text-xs font-bold text-purple-600 shadow-sm"
+                            >
+                              {lang.toUpperCase()}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {translationHistory.length > 0 && (
+                    <div className="pt-2 border-t border-purple-100 flex flex-col gap-3">
+                      <p className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider">Conversation History</p>
+                      {translationHistory.map((entry) => (
+                        <div key={entry.id} className="bg-white/80 rounded-lg p-3 shadow-sm border border-purple-50 hover:bg-white transition-colors">
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="text-[10px] font-bold text-slate-400">{entry.timestamp}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded uppercase">{entry.originalLang}</span>
+                          </div>
+                          {entry.originalText && (
+                            <p className="text-slate-600 font-medium mb-1">{entry.originalText}</p>
+                          )}
+                          <div className="flex items-start gap-2 mt-2 pt-2 border-t border-dashed border-slate-100">
+                             <span className="text-indigo-500 mt-0.5 text-xs">➜</span>
+                             <p className="text-indigo-700 font-semibold text-sm">{entry.translatedText}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

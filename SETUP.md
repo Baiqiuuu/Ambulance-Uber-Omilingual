@@ -15,6 +15,7 @@ pnpm install
 NEXT_PUBLIC_API_BASE=http://localhost:4000
 NEXT_PUBLIC_WS_BASE=http://localhost:4000
 NEXT_PUBLIC_MAPBOX_TOKEN=your_mapbox_token_here
+OPENAI_API_KEY=your_openai_api_key_here
 ```
 
 **Create `apps/@app/server/.env` file:**
@@ -65,6 +66,7 @@ Open your browser and visit http://localhost:3000, you should see:
 1. **Port already in use**: Modify the port number in `.env` file
 2. **Database connection failed**: Ensure Docker services are running (`docker ps`)
 3. **Mapbox map not displaying**: Check if `NEXT_PUBLIC_MAPBOX_TOKEN` is correctly set
+4. **Language detection not working**: Ensure `OPENAI_API_KEY` is set in both root `.env` and `apps/@app/web/.env` files
 
 
 
