@@ -51,6 +51,16 @@ const MAP_STYLES: Record<MapStyle, string> = {
   street: 'mapbox://styles/mapbox/streets-v12',
 };
 
+const STAFF_DATABASE: Record<string, { name: string; role: string }[]> = {
+  'es': [{ name: 'Dr. Rodriguez', role: 'On-call' }, { name: 'Nurse Martinez', role: 'Triage' }],
+  'fr': [{ name: 'Dr. Dubois', role: 'Specialist' }],
+  'zh': [{ name: 'Dr. Li', role: 'Surgeon' }],
+  'hi': [{ name: 'Dr. Patel', role: 'General' }],
+  'ar': [{ name: 'Dr. Hassan', role: 'Emergency' }],
+  // Default fallback
+  'default': [{ name: 'Staff Dispatch', role: 'General' }]
+};
+
 export default function Home() {
   const [viewMode, setViewMode] = useState<ViewMode>('user');
 
@@ -100,15 +110,15 @@ export default function Home() {
   const [showLanguagePanel, setShowLanguagePanel] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [detectedLanguages, setDetectedLanguages] = useState<string[]>([]);
-   type TranslationEntry = {
-     id: string;
-     timestamp: string;
-     originalLang: string;
-     originalText: string;
-     translatedText: string;
-   };
+  type TranslationEntry = {
+    id: string;
+    timestamp: string;
+    originalLang: string;
+    originalText: string;
+    translatedText: string;
+  };
 
-   const [translationHistory, setTranslationHistory] = useState<TranslationEntry[]>([]);
+  const [translationHistory, setTranslationHistory] = useState<TranslationEntry[]>([]);
   const [languageError, setLanguageError] = useState<string | null>(null);
   const [isPanelMinimized, setIsPanelMinimized] = useState(false);
   // Initialize with a safe default, update in useEffect
@@ -1215,7 +1225,7 @@ export default function Home() {
           const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           const newInput = result.input.trim();
           const newOutput = result.output.trim();
-          
+
           if (newInput || newOutput) {
             setTranslationHistory(prev => [...prev, {
               id: Date.now().toString(),
@@ -1229,7 +1239,7 @@ export default function Home() {
           // Fallback for legacy response
           const newText = result.text.trim();
           if (newText) {
-             setTranslationHistory(prev => [...prev, {
+            setTranslationHistory(prev => [...prev, {
               id: Date.now().toString(),
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               originalLang: '?',
@@ -2227,11 +2237,49 @@ export default function Home() {
                             <p className="text-slate-600 font-medium mb-1">{entry.originalText}</p>
                           )}
                           <div className="flex items-start gap-2 mt-2 pt-2 border-t border-dashed border-slate-100">
-                             <span className="text-indigo-500 mt-0.5 text-xs">➜</span>
-                             <p className="text-indigo-700 font-semibold text-sm">{entry.translatedText}</p>
+                            <span className="text-indigo-500 mt-0.5 text-xs">➜</span>
+                            <p className="text-indigo-700 font-semibold text-sm">{entry.translatedText}</p>
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* Hospital Staff Contact Message */}
+                  {detectedLanguages.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-slate-200 animate-in slide-in-from-bottom-2">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Hospital Staff Contact
+                      </p>
+                      <div className="space-y-2">
+                        {detectedLanguages.map((lang, idx) => {
+                          const staffMembers = STAFF_DATABASE[lang.toLowerCase()] || STAFF_DATABASE['default'];
+                          return (
+                            <div key={`${lang}-${idx}`} className="bg-emerald-50 border border-emerald-100 text-emerald-700 px-3 py-2.5 rounded-xl text-sm flex flex-col gap-2 shadow-sm">
+                              <div className="flex items-center gap-3">
+                                <div className="bg-emerald-100 p-1.5 rounded-full">
+                                  <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </div>
+                                <div>
+                                  <p className="font-bold text-xs uppercase tracking-wide text-emerald-800">Message Sent</p>
+                                  <p className="text-xs text-emerald-600">Language detected: {lang.toUpperCase()}</p>
+                                </div>
+                              </div>
+                              <div className="pl-10 space-y-1">
+                                {staffMembers.map((staff, sIdx) => (
+                                  <div key={sIdx} className="text-xs font-medium flex items-center gap-1">
+                                    <span className="w-1 h-1 rounded-full bg-emerald-400"></span>
+                                    Contacted {staff.name} ({staff.role})
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
