@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import MapGL, { Marker, MapLayerMouseEvent, Source, Layer } from 'react-map-gl';
 import type { MapRef } from 'react-map-gl';
 import type { Map as MapboxMap, CustomLayerInterface } from 'mapbox-gl';
@@ -90,6 +90,28 @@ export default function Home() {
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
   const [isEarthView, setIsEarthView] = useState(false);
+  const [routeData, setRouteData] = useState<Map<string, {
+    type: 'FeatureCollection';
+    features: Array<{
+      type: 'Feature';
+      properties: { distance: number; duration: number };
+      geometry: any;
+    }>;
+  }>>(new Map());
+  const routeDataRef = useRef<Map<string, {
+    type: 'FeatureCollection';
+    features: Array<{
+      type: 'Feature';
+      properties: { distance: number; duration: number };
+      geometry: any;
+    }>;
+  }>>(new Map());
+  // Track route progress for each vehicle (0 to 1)
+  const routeProgressRef = useRef<Map<string, number>>(new Map());
+  // Track route distances for each vehicle (for accurate splitting)
+  const routeDistancesCacheRef = useRef<Map<string, number[]>>(new Map());
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   // New states for renaming and map picking
   const [registerName, setRegisterName] = useState('');
@@ -150,10 +172,14 @@ export default function Home() {
     endLng: number;
     startTime: number;
     duration: number;
+    routePath?: Array<[number, number]>; // [lng, lat] coordinates from route
+    routeDistances?: number[]; // Cumulative distances along route for constant speed
   }>>(new Map());
   
   // Vehicle destinations (where they're going to)
   const [vehicleDestinations, setVehicleDestinations] = useState<Map<string, { lat: number; lng: number }>>(new Map());
+  const vehicleDestinationsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
+  const calculatedRoutesRef = useRef<Map<string, { start: { lat: number; lng: number }; end: { lat: number; lng: number } }>>(new Map());
 
   // Find A1 ID to trigger effect only when A1 is created/deleted
   const a1Id = useMemo(() => vehicles.find(v => v.name === 'A1')?.id, [vehicles]);
@@ -244,20 +270,52 @@ export default function Home() {
           const startLng = currentAnimated?.lng ?? existing.lng;
           
           // Set destination (where vehicle is going to)
-          setVehicleDestinations(prev => {
-            const newMap = new Map(prev);
-            newMap.set(v.id, { lat: v.lat, lng: v.lng });
-            return newMap;
-          });
+          const newDestination = { lat: v.lat, lng: v.lng };
+          const oldDestination = vehicleDestinationsRef.current.get(v.id);
           
-          vehicleAnimationsRef.current.set(v.id, {
+          // Only update if destination actually changed
+          const destinationChanged = !oldDestination || 
+            Math.abs(oldDestination.lat - newDestination.lat) > 0.000001 ||
+            Math.abs(oldDestination.lng - newDestination.lng) > 0.000001;
+          
+          if (destinationChanged) {
+            setVehicleDestinations(prev => {
+              const newMap = new Map(prev);
+              newMap.set(v.id, newDestination);
+              vehicleDestinationsRef.current = newMap;
+              // Clear calculated route for this vehicle so it gets recalculated
+              calculatedRoutesRef.current.delete(v.id);
+              return newMap;
+            });
+          }
+          
+          // Check if we have a route for this vehicle and use its path
+          // Try to get route from ref (most up-to-date)
+          const route = routeDataRef.current.get(v.id);
+          let routePath: Array<[number, number]> | undefined;
+          
+          if (route && route.features.length > 0) {
+            const geometry = route.features[0].geometry;
+            if (geometry.type === 'LineString' && geometry.coordinates && Array.isArray(geometry.coordinates)) {
+              routePath = geometry.coordinates as Array<[number, number]>;
+            }
+          }
+          
+          // Create animation object
+          const animObj = {
             startLat,
             startLng,
             endLat: v.lat,
             endLng: v.lng,
             startTime: performance.now(),
             duration: 14000, // 14s animation to match the 15s update interval
-          });
+            routePath: routePath,
+          };
+          
+          vehicleAnimationsRef.current.set(v.id, animObj);
+          
+          // If route wasn't available but might be calculated soon, 
+          // the route calculation will update this animation when it completes
           
           // Ensure animation loop is running
           if (animationFrameRef.current === null) {
@@ -276,13 +334,115 @@ export default function Home() {
 
                 if (progress < 1) {
                   // Still animating
-                  const currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
-                  const currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                  let currentLat: number;
+                  let currentLng: number;
+
+                  // Try to get route path from animation, or check if route was calculated after animation started
+                  let routePath = anim.routePath;
+                  
+                  // If no route path in animation, try to get it from route data (route might have been calculated after animation started)
+                  if (!routePath || routePath.length === 0) {
+                    const route = routeDataRef.current.get(vehicleId);
+                    if (route && route.features.length > 0) {
+                      const geometry = route.features[0].geometry;
+                      if (geometry.type === 'LineString' && geometry.coordinates && Array.isArray(geometry.coordinates)) {
+                        routePath = geometry.coordinates as Array<[number, number]>;
+                        // Update animation with route path for next frame
+                        vehicleAnimationsRef.current.set(vehicleId, {
+                          ...anim,
+                          routePath: routePath,
+                        });
+                      }
+                    }
+                  }
+                  
+                  if (routePath && routePath.length > 0) {
+                    // Follow route path with constant speed using distance-based interpolation
+                    let routeDistances = anim.routeDistances;
+                    
+                    // Calculate cumulative distances if not already calculated
+                    if (!routeDistances || routeDistances.length !== routePath.length) {
+                      routeDistances = [0]; // Start at distance 0
+                      for (let i = 1; i < routePath.length; i++) {
+                        const prev = routePath[i - 1];
+                        const curr = routePath[i];
+                        if (prev && curr && Array.isArray(prev) && Array.isArray(curr)) {
+                          // Calculate distance between consecutive points (Haversine approximation)
+                          const dLat = curr[1] - prev[1];
+                          const dLng = curr[0] - prev[0];
+                          const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+                          routeDistances.push(routeDistances[i - 1] + distance);
+                        } else {
+                          routeDistances.push(routeDistances[i - 1]);
+                        }
+                      }
+                      // Store calculated distances in animation and cache
+                      vehicleAnimationsRef.current.set(vehicleId, {
+                        ...anim,
+                        routeDistances: routeDistances,
+                      });
+                      routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+                    } else if (routeDistances && routeDistances.length === routePath.length) {
+                      // Update cache if distances exist but aren't cached
+                      routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+                    }
+                    
+                    // Use eased progress to determine position along route based on distance
+                    const easedProgress = easeInOutCubic;
+                    const totalDistance = routeDistances[routeDistances.length - 1];
+                    const targetDistance = easedProgress * totalDistance;
+                    
+                    // Store progress for route visualization (using distance-based progress)
+                    routeProgressRef.current.set(vehicleId, easedProgress);
+                    
+                    // Find the segment that contains the target distance
+                    let segmentIndex = 0;
+                    for (let i = 0; i < routeDistances.length - 1; i++) {
+                      if (targetDistance >= routeDistances[i] && targetDistance <= routeDistances[i + 1]) {
+                        segmentIndex = i;
+                        break;
+                      }
+                      if (targetDistance > routeDistances[i]) {
+                        segmentIndex = i;
+                      }
+                    }
+                    segmentIndex = Math.min(segmentIndex, routePath.length - 2);
+                    
+                    const segmentStart = routeDistances[segmentIndex];
+                    const segmentEnd = routeDistances[segmentIndex + 1];
+                    const segmentLength = segmentEnd - segmentStart;
+                    const segmentProgress = segmentLength > 0 
+                      ? (targetDistance - segmentStart) / segmentLength 
+                      : 0;
+                    
+                    const currentPoint = routePath[segmentIndex];
+                    const nextPoint = routePath[segmentIndex + 1];
+                    
+                    if (currentPoint && nextPoint && Array.isArray(currentPoint) && Array.isArray(nextPoint)) {
+                      // Smooth interpolation between current and next point in route
+                      // Route coordinates are [lng, lat]
+                      currentLng = currentPoint[0] + (nextPoint[0] - currentPoint[0]) * segmentProgress;
+                      currentLat = currentPoint[1] + (nextPoint[1] - currentPoint[1]) * segmentProgress;
+                    } else {
+                      // Fallback if route path is malformed
+                      currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
+                      currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                    }
+                  } else {
+                    // Fallback to straight line if no route path available
+                    currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
+                    currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                    // Still update progress for visualization (even without route, progress is still valid)
+                    routeProgressRef.current.set(vehicleId, easeInOutCubic);
+                  }
+                  
                   newAnimatedVehicles.set(vehicleId, { lat: currentLat, lng: currentLng });
                 } else {
                   // Animation complete
                   newAnimatedVehicles.set(vehicleId, { lat: anim.endLat, lng: anim.endLng });
                   vehicleAnimationsRef.current.delete(vehicleId);
+                  // Set progress to 1 (fully traveled)
+                  routeProgressRef.current.set(vehicleId, 1);
                 }
               });
 
@@ -331,6 +491,7 @@ export default function Home() {
         if (!newMap.has(v.id)) {
           newMap.set(v.id, { lat: v.lat, lng: v.lng });
         }
+        vehicleDestinationsRef.current = newMap; // Update ref
         return newMap;
       });
     });
@@ -848,6 +1009,148 @@ export default function Home() {
   }, [vehicles, sharedLocation, animatedVehicles]);
 
   const pathsData = generatePaths();
+
+  // Calculate route between two coordinates using Mapbox Directions API
+  const calculateRoute = useCallback(async (vehicleId: string, start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
+    const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!mapboxToken) {
+      setRouteError('Mapbox token not configured');
+      return;
+    }
+
+    setRouteLoading(true);
+    setRouteError(null);
+
+    try {
+      // Mapbox Directions API expects coordinates as [lng, lat]
+      const coordinates = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?geometries=geojson&access_token=${mapboxToken}`;
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Route calculation failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const routeFeature = {
+          type: 'Feature' as const,
+          properties: {
+            distance: route.distance, // in meters
+            duration: route.duration, // in seconds
+          },
+          geometry: route.geometry,
+        };
+
+        setRouteData(prev => {
+          const newMap = new Map(prev);
+          newMap.set(vehicleId, {
+            type: 'FeatureCollection' as const,
+            features: [routeFeature],
+          });
+          routeDataRef.current = newMap; // Update ref
+          return newMap;
+        });
+        
+        // Reset progress for new route and clear cached distances
+        routeProgressRef.current.set(vehicleId, 0);
+        routeDistancesCacheRef.current.delete(vehicleId);
+
+        // Update animation to use route path if animation is active or will be active
+        // This ensures animation always has the route path, even if it started before route was calculated
+        if (route.geometry.type === 'LineString' && route.geometry.coordinates) {
+          // Extract coordinates from route geometry [lng, lat] format
+          const routePath = route.geometry.coordinates as Array<[number, number]>;
+          
+          // Update existing animation if it exists
+          const anim = vehicleAnimationsRef.current.get(vehicleId);
+          if (anim) {
+            vehicleAnimationsRef.current.set(vehicleId, {
+              ...anim,
+              routePath: routePath,
+            });
+          }
+          
+          // Also store route path for future animations
+          // This ensures that if animation hasn't started yet, it will have the route when it does
+        }
+      } else {
+        throw new Error('No route found');
+      }
+    } catch (error) {
+      console.error('Failed to calculate route:', error);
+      setRouteError(error instanceof Error ? error.message : 'Failed to calculate route');
+      setRouteData(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(vehicleId);
+        routeDataRef.current = newMap; // Update ref
+        return newMap;
+      });
+    } finally {
+      setRouteLoading(false);
+    }
+  }, []);
+
+  // Auto-calculate routes from each vehicle's current position to its destination
+  useEffect(() => {
+    vehicles.forEach(vehicle => {
+      const destination = vehicleDestinations.get(vehicle.id);
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const currentLat = animatedPos?.lat ?? vehicle.lat;
+      const currentLng = animatedPos?.lng ?? vehicle.lng;
+
+      // Only calculate route if vehicle has a destination that's different from current position
+      if (destination) {
+        const distance = Math.sqrt(
+          Math.pow(destination.lat - currentLat, 2) + 
+          Math.pow(destination.lng - currentLng, 2)
+        );
+        
+        // Only calculate if destination is more than ~10 meters away
+        if (distance > 0.0001) {
+          // Check if we already calculated a route for this exact start/end pair
+          const calculatedRoute = calculatedRoutesRef.current.get(vehicle.id);
+          const routeKey = {
+            start: { lat: currentLat, lng: currentLng },
+            end: destination
+          };
+          
+          // Only calculate if:
+          // 1. No route was calculated yet, OR
+          // 2. The destination changed (checked by comparing end points)
+          const needsCalculation = !calculatedRoute || 
+            Math.abs(calculatedRoute.end.lat - destination.lat) > 0.000001 ||
+            Math.abs(calculatedRoute.end.lng - destination.lng) > 0.000001;
+          
+          if (needsCalculation) {
+            // Store that we're calculating this route
+            calculatedRoutesRef.current.set(vehicle.id, routeKey);
+            calculateRoute(vehicle.id, { lat: currentLat, lng: currentLng }, destination);
+          }
+        } else {
+          // Remove route if vehicle has reached destination
+          setRouteData(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(vehicle.id);
+            routeDataRef.current = newMap; // Update ref
+            return newMap;
+          });
+          calculatedRoutesRef.current.delete(vehicle.id);
+        }
+      } else {
+        // Remove route if no destination
+        setRouteData(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(vehicle.id);
+          routeDataRef.current = newMap; // Update ref
+          return newMap;
+        });
+        calculatedRoutesRef.current.delete(vehicle.id);
+      }
+    });
+  }, [vehicles, vehicleDestinations, calculateRoute]); // Removed animatedVehicles to prevent recalculation during animation
 
   // Calculate nearest OR tracked ambulance distance
   // If a vehicle is selected/tracked, we show that one. Otherwise nearest available.
@@ -1608,7 +1911,174 @@ export default function Home() {
       >
         {/* 3D model layer - added directly to map via useEffect */}
 
-        {/* Paths from vehicles and coordinates to shared location */}
+        {/* Route paths (shortest path from each ambulance's current position to its destination) */}
+        {Array.from(routeData.entries()).map(([vehicleId, route]) => {
+          const progress = routeProgressRef.current.get(vehicleId) || 0;
+          const geometry = route.features[0]?.geometry;
+          
+          if (!geometry || geometry.type !== 'LineString' || !geometry.coordinates) {
+            return null;
+          }
+          
+          const coordinates = geometry.coordinates as Array<[number, number]>;
+          
+          // Get cached route distances for accurate distance-based splitting (same as animation)
+          let routeDistances = routeDistancesCacheRef.current.get(vehicleId);
+          
+          // Calculate distances if not cached (same calculation as animation)
+          if (!routeDistances || routeDistances.length !== coordinates.length) {
+            routeDistances = [0];
+            for (let i = 1; i < coordinates.length; i++) {
+              const prev = coordinates[i - 1];
+              const curr = coordinates[i];
+              if (prev && curr && Array.isArray(prev) && Array.isArray(curr)) {
+                const dLat = curr[1] - prev[1];
+                const dLng = curr[0] - prev[0];
+                const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+                routeDistances.push(routeDistances[i - 1] + distance);
+              } else {
+                routeDistances.push(routeDistances[i - 1]);
+              }
+            }
+            routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+          }
+          
+          // Split route into traveled (grey) and remaining (green) portions using distance-based calculation
+          const traveledCoordinates: Array<[number, number]> = [];
+          const remainingCoordinates: Array<[number, number]> = [];
+          
+          if (progress > 0 && progress < 1 && coordinates.length > 1 && routeDistances.length === coordinates.length) {
+            // Use same distance-based calculation as animation
+            const totalDistance = routeDistances[routeDistances.length - 1];
+            const targetDistance = progress * totalDistance;
+            
+            // Find the segment that contains the target distance (same logic as animation)
+            let segmentIndex = 0;
+            for (let i = 0; i < routeDistances.length - 1; i++) {
+              if (targetDistance >= routeDistances[i] && targetDistance <= routeDistances[i + 1]) {
+                segmentIndex = i;
+                break;
+              }
+              if (targetDistance > routeDistances[i]) {
+                segmentIndex = i;
+              }
+            }
+            segmentIndex = Math.min(segmentIndex, coordinates.length - 2);
+            
+            const segmentStart = routeDistances[segmentIndex];
+            const segmentEnd = routeDistances[segmentIndex + 1];
+            const segmentLength = segmentEnd - segmentStart;
+            const segmentProgress = segmentLength > 0 
+              ? (targetDistance - segmentStart) / segmentLength 
+              : 0;
+            
+            // Add all points up to current segment
+            for (let i = 0; i <= segmentIndex; i++) {
+              traveledCoordinates.push(coordinates[i]);
+            }
+            
+            // Interpolate current position and add to both (same as animation)
+            if (segmentIndex < coordinates.length - 1) {
+              const currentPoint = coordinates[segmentIndex];
+              const nextPoint = coordinates[segmentIndex + 1];
+              if (currentPoint && nextPoint && Array.isArray(currentPoint) && Array.isArray(nextPoint)) {
+                const currentLng = currentPoint[0] + (nextPoint[0] - currentPoint[0]) * segmentProgress;
+                const currentLat = currentPoint[1] + (nextPoint[1] - currentPoint[1]) * segmentProgress;
+                
+                traveledCoordinates.push([currentLng, currentLat]);
+                remainingCoordinates.push([currentLng, currentLat]);
+              }
+            }
+            
+            // Add remaining points
+            for (let i = segmentIndex + 1; i < coordinates.length; i++) {
+              remainingCoordinates.push(coordinates[i]);
+            }
+          } else if (progress >= 1) {
+            // Entire route is traveled
+            traveledCoordinates.push(...coordinates);
+          } else {
+            // No progress yet, entire route is remaining
+            remainingCoordinates.push(...coordinates);
+          }
+          
+          return (
+            <React.Fragment key={`route-fragment-${vehicleId}`}>
+              {/* Traveled portion (grey) */}
+              {traveledCoordinates.length > 1 && (
+                <Source key={`route-traveled-${vehicleId}`} id={`route-traveled-${vehicleId}`} type="geojson" data={{
+                  type: 'FeatureCollection',
+                  features: [{
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: traveledCoordinates,
+                    },
+                  }],
+                }}>
+                  <Layer
+                    id={`route-traveled-glow-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#6b7280',
+                      'line-width': 10,
+                      'line-opacity': 0.2,
+                      'line-blur': 8,
+                    }}
+                  />
+                  <Layer
+                    id={`route-traveled-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#6b7280',
+                      'line-width': 5,
+                      'line-opacity': 0.6,
+                    }}
+                  />
+                </Source>
+              )}
+              
+              {/* Remaining portion (green) */}
+              {remainingCoordinates.length > 1 && (
+                <Source key={`route-remaining-${vehicleId}`} id={`route-remaining-${vehicleId}`} type="geojson" data={{
+                  type: 'FeatureCollection',
+                  features: [{
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: remainingCoordinates,
+                    },
+                  }],
+                }}>
+                  <Layer
+                    id={`route-remaining-glow-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#10b981',
+                      'line-width': 10,
+                      'line-opacity': 0.3,
+                      'line-blur': 8,
+                    }}
+                  />
+                  <Layer
+                    id={`route-remaining-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#10b981',
+                      'line-width': 5,
+                      'line-opacity': 0.9,
+                      'line-dasharray': [2, 2],
+                    }}
+                  />
+                </Source>
+              )}
+            </React.Fragment>
+          );
+        })}
+
+        {/* Paths from vehicles and coordinates to shared location (straight lines) */}
         {pathsData && (
           <Source id="paths" type="geojson" data={pathsData}>
             <Layer
