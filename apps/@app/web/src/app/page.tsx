@@ -96,6 +96,7 @@ export default function Home() {
   const [isPickingLocation, setIsPickingLocation] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editingLocationVehicleId, setEditingLocationVehicleId] = useState<string | null>(null);
 
   // Language detection states
   const [showLanguagePanel, setShowLanguagePanel] = useState(false);
@@ -946,17 +947,47 @@ export default function Home() {
     }
   }, []);
 
-  const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
+  const handleMapClick = useCallback(async (event: MapLayerMouseEvent) => {
     const { lngLat } = event;
 
     if (isPickingLocation) {
       // In picking mode, register ambulance at location
       registerAmbulance(lngLat.lat, lngLat.lng);
+    } else if (editingLocationVehicleId) {
+      // In location edit mode, update the vehicle's location
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+        const response = await fetch(`${apiBase}/api/medical/vehicles/${editingLocationVehicleId}/location`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            latitude: lngLat.lat,
+            longitude: lngLat.lng,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          console.log('Vehicle location updated successfully');
+          // Refresh vehicle list
+          const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+          const vehiclesResult = await vehiclesResponse.json();
+          if (vehiclesResult.success) {
+            setMedicalVehicles(vehiclesResult.vehicles || []);
+          }
+          // Exit edit mode
+          setEditingLocationVehicleId(null);
+        }
+      } catch (error) {
+        console.error('Failed to update vehicle location:', error);
+      }
     } else {
       // Normal mode: set clicked coord for query
       setClickedCoord({ lat: lngLat.lat, lng: lngLat.lng });
     }
-  }, [isPickingLocation, registerAmbulance]);
+  }, [isPickingLocation, registerAmbulance, editingLocationVehicleId]);
 
   useEffect(() => {
     if (!clickedCoord) {
@@ -1395,7 +1426,7 @@ export default function Home() {
   }
 
   return (
-    <div className={`h-screen w-screen relative ${isPickingLocation ? 'cursor-crosshair' : ''}`}>
+    <div className={`h-screen w-screen relative ${isPickingLocation || editingLocationVehicleId ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
         initialViewState={{
@@ -2195,8 +2226,26 @@ export default function Home() {
                               <span className="text-slate-300"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></span>
                             </div>
                           )}
-                          <div className="text-xs font-mono text-slate-400 mt-1">
-                            {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
+                          <div className="text-xs font-mono text-slate-400 mt-1 flex items-center gap-2">
+                            <span>{vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}</span>
+                            <button
+                              onClick={() => {
+                                if (editingLocationVehicleId === vehicle.id) {
+                                  setEditingLocationVehicleId(null);
+                                } else {
+                                  setEditingLocationVehicleId(vehicle.id);
+                                }
+                              }}
+                              className={`p-1 rounded hover:bg-slate-100 transition-colors ${editingLocationVehicleId === vehicle.id
+                                ? 'text-indigo-600 bg-indigo-50'
+                                : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                              title={editingLocationVehicleId === vehicle.id ? 'Click map to update location (click again to cancel)' : 'Click to edit location'}
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                            </button>
                           </div>
                         </div>
                         <span
@@ -2209,13 +2258,7 @@ export default function Home() {
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        <button
-                          onClick={() => updateVehicleLocation(vehicle.id)}
-                          className="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
-                        >
-                          Update Loc
-                        </button>
+                      <div className="mb-3">
                         <button
                           onClick={() =>
                             updateVehicleStatus(
@@ -2223,7 +2266,7 @@ export default function Home() {
                               vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
                             )
                           }
-                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
+                          className={`w-full px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
                             ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
                             : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
                             }`}
@@ -2233,21 +2276,6 @@ export default function Home() {
                       </div>
 
                       <div className="space-y-2 pt-3 border-t border-slate-100/50">
-                        {selectedVehicle?.id === vehicle.id && trackingInterval ? (
-                          <button
-                            onClick={stopTracking}
-                            className="w-full px-3 py-2 bg-rose-500 text-white text-xs font-bold rounded-xl hover:bg-rose-600 shadow-sm shadow-rose-500/20 transition-all flex items-center justify-center gap-2"
-                          >
-                            <span className="animate-pulse">●</span> Stop Tracking
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => startTracking(vehicle.id)}
-                            className="w-full px-3 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 shadow-sm shadow-indigo-500/20 transition-all"
-                          >
-                            Start Live Tracking
-                          </button>
-                        )}
                         <button
                           onClick={() => deleteVehicle(vehicle.id)}
                           className="w-full px-3 py-2 text-rose-500 text-xs font-bold rounded-xl hover:bg-rose-50 transition-all"
