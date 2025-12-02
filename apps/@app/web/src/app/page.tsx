@@ -959,6 +959,88 @@ export default function Home() {
     return;
   }, [mapLoaded, mapStyle]); // Remove vehicles from dependencies to prevent layer recreation
 
+  // Add traffic layer helper function
+  const addTrafficLayer = useCallback((map: MapboxMap) => {
+    // Check if traffic layer already exists
+    if (map.getLayer('traffic-layer')) {
+      return;
+    }
+
+    try {
+      // Add traffic source if it doesn't exist
+      if (!map.getSource('mapbox-traffic')) {
+        map.addSource('mapbox-traffic', {
+          type: 'vector',
+          url: 'mapbox://mapbox.mapbox-traffic-v1',
+        });
+      }
+
+      // Find the first road layer to insert traffic after it
+      const layers = map.getStyle().layers;
+      let beforeLayerId: string | undefined;
+      
+      // Find a road layer to insert traffic after
+      for (const layer of layers) {
+        if (layer.type === 'line' && layer.id && (
+          layer.id.includes('road') || 
+          layer.id.includes('street') ||
+          layer.id.includes('highway') ||
+          layer.id.includes('bridge')
+        )) {
+          beforeLayerId = layer.id;
+          break;
+        }
+      }
+
+      // If no road layer found, insert before first label layer
+      if (!beforeLayerId) {
+        const labelLayer = layers.find(
+          (layer) => layer.type === 'symbol' && layer.layout && 'text-field' in (layer.layout as any)
+        );
+        beforeLayerId = labelLayer?.id;
+      }
+
+      // Add traffic layer
+      map.addLayer(
+        {
+          id: 'traffic-layer',
+          type: 'line',
+          source: 'mapbox-traffic',
+          'source-layer': 'traffic',
+          paint: {
+            'line-color': [
+              'case',
+              ['==', ['get', 'congestion'], 'low'],
+              '#00ff00', // Green for low traffic
+              ['==', ['get', 'congestion'], 'moderate'],
+              '#ffff00', // Yellow for moderate traffic
+              ['==', ['get', 'congestion'], 'heavy'],
+              '#ff8800', // Orange for heavy traffic
+              ['==', ['get', 'congestion'], 'severe'],
+              '#ff0000', // Red for severe traffic
+              '#888888' // Gray as default
+            ],
+            'line-width': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10, 0.5,
+              13, 1,
+              16, 2,
+              20, 4
+            ],
+            'line-opacity': 0.6,
+          },
+        },
+        beforeLayerId
+      );
+      console.log('Traffic layer added successfully');
+    } catch (error) {
+      console.warn('Failed to add traffic layer:', error);
+      // Traffic may not be available in all regions or with all map styles
+    }
+  }, []);
+
   const handleMapLoad = useCallback(() => {
     setMapLoaded(true);
     // Ensure map uses mercator projection (required for custom layers)
@@ -973,8 +1055,15 @@ export default function Home() {
       } catch (e) {
         // Projection API might not be available in all versions
       }
+
+      // Add traffic layer after map loads
+      if (map.isStyleLoaded()) {
+        addTrafficLayer(map);
+      } else {
+        map.once('style.load', () => addTrafficLayer(map));
+      }
     }
-  }, []);
+  }, [addTrafficLayer]);
 
   const handleMapClick = useCallback(async (event: MapLayerMouseEvent) => {
     const { lngLat } = event;
@@ -1240,6 +1329,8 @@ export default function Home() {
             map.removeLayer('3d-buildings');
           }
         }
+        // Add traffic layer after style loads
+        addTrafficLayer(map);
       });
 
       // If style already loaded, execute directly
@@ -1253,9 +1344,11 @@ export default function Home() {
             map.removeLayer('3d-buildings');
           }
         }
+        // Add traffic layer
+        addTrafficLayer(map);
       }
     }
-  }, [add3DBuildings]);
+  }, [add3DBuildings, addTrafficLayer]);
 
   // Language detection handlers
   const toggleLanguageDetection = async () => {
