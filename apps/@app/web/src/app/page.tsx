@@ -89,6 +89,7 @@ export default function Home() {
   const [newCoordLng, setNewCoordLng] = useState('');
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
+  const [isEarthView, setIsEarthView] = useState(false);
 
   // New states for renaming and map picking
   const [registerName, setRegisterName] = useState('');
@@ -137,6 +138,19 @@ export default function Home() {
   // Ref for A1 movement step state
   const a1StepRef = useRef(0);
 
+  // Smooth animation state for vehicles
+  const [animatedVehicles, setAnimatedVehicles] = useState<Map<string, { lat: number; lng: number }>>(new Map());
+  const animatedVehiclesRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
+  const animationFrameRef = useRef<number | null>(null);
+  const vehicleAnimationsRef = useRef<Map<string, {
+    startLat: number;
+    startLng: number;
+    endLat: number;
+    endLng: number;
+    startTime: number;
+    duration: number;
+  }>>(new Map());
+
   // Find A1 ID to trigger effect only when A1 is created/deleted
   const a1Id = useMemo(() => vehicles.find(v => v.name === 'A1')?.id, [vehicles]);
 
@@ -144,41 +158,22 @@ export default function Home() {
   useEffect(() => {
     if (!a1Id) return;
 
-    console.log('🚑 Starting A1 square movement pattern (5s interval)...');
+    console.log('🚑 Starting A1 movement pattern (15s interval)...');
 
-    // Philadelphia City Hall Center
-    const centerLat = 39.9526;
-    const centerLng = -75.1652;
-    const offset = 0.005; // Square size
+    // Exact coordinates for A1 to visit
+    const positions = [
+      { lat: 39.94524, lng: -75.17175},
+      { lat: 39.95705, lng: -75.16918 },
+      { lat: 39.95559, lng: -75.15748 },
+      { lat: 39.94633, lng: -75.15950 },
+      { lat: 39.94783, lng: -75.17120 },
+    ];
 
     const interval = setInterval(async () => {
       const step = a1StepRef.current;
-      let newLat = centerLat;
-      let newLng = centerLng;
-
-      // Square pattern: TL -> TR -> BR -> BL
-      switch (step % 4) {
-        case 0: // Top Left
-          newLat += offset;
-          newLng -= offset;
-          break;
-        case 1: // Top Right
-          newLat += offset;
-          newLng += offset;
-          break;
-        case 2: // Bottom Right
-          newLat -= offset;
-          newLng += offset;
-          break;
-        case 3: // Bottom Left
-          newLat -= offset;
-          newLng -= offset;
-          break;
-      }
-
-      // Add randomness (jitter)
-      newLat += (Math.random() - 0.5) * 0.002;
-      newLng += (Math.random() - 0.5) * 0.002;
+      const position = positions[step % positions.length];
+      const newLat = position.lat;
+      const newLng = position.lng;
 
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
@@ -195,7 +190,7 @@ export default function Home() {
       }
 
       a1StepRef.current++;
-    }, 5000);
+    }, 15000);
 
     return () => {
       console.log('🚑 Stopping A1 movement.');
@@ -237,6 +232,67 @@ export default function Home() {
         m.set(v.id, v);
         const newVehicles = Array.from(m.values());
         vehiclesRef.current = newVehicles; // Update ref with latest vehicles
+        
+        // Start smooth animation for position changes
+        if (existing && (Math.abs(existing.lat - v.lat) > 0.000001 || Math.abs(existing.lng - v.lng) > 0.000001)) {
+          const currentAnimated = animatedVehiclesRef.current.get(v.id);
+          const startLat = currentAnimated?.lat ?? existing.lat;
+          const startLng = currentAnimated?.lng ?? existing.lng;
+          
+          vehicleAnimationsRef.current.set(v.id, {
+            startLat,
+            startLng,
+            endLat: v.lat,
+            endLng: v.lng,
+            startTime: performance.now(),
+            duration: 14000, // 14s animation to match the 15s update interval
+          });
+          
+          // Ensure animation loop is running
+          if (animationFrameRef.current === null) {
+            const animate = () => {
+              const now = performance.now();
+              const newAnimatedVehicles = new Map(animatedVehiclesRef.current);
+
+              vehicleAnimationsRef.current.forEach((anim, vehicleId) => {
+                const elapsed = now - anim.startTime;
+                const progress = Math.min(elapsed / anim.duration, 1);
+                
+                // Use easing function for smooth acceleration/deceleration
+                const easeInOutCubic = progress < 0.5
+                  ? 4 * progress * progress * progress
+                  : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+                if (progress < 1) {
+                  // Still animating
+                  const currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
+                  const currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                  newAnimatedVehicles.set(vehicleId, { lat: currentLat, lng: currentLng });
+                } else {
+                  // Animation complete
+                  newAnimatedVehicles.set(vehicleId, { lat: anim.endLat, lng: anim.endLng });
+                  vehicleAnimationsRef.current.delete(vehicleId);
+                }
+              });
+
+              animatedVehiclesRef.current = newAnimatedVehicles;
+              setAnimatedVehicles(newAnimatedVehicles);
+
+              // Continue animation loop if there are active animations
+              if (vehicleAnimationsRef.current.size > 0) {
+                animationFrameRef.current = requestAnimationFrame(animate);
+              } else {
+                animationFrameRef.current = null;
+              }
+            };
+            animationFrameRef.current = requestAnimationFrame(animate);
+          }
+        } else {
+          // No position change, just update immediately
+          animatedVehiclesRef.current.set(v.id, { lat: v.lat, lng: v.lng });
+          setAnimatedVehicles(new Map(animatedVehiclesRef.current));
+        }
+        
         console.log('Current vehicle list:', newVehicles);
         return newVehicles;
       });
@@ -251,6 +307,16 @@ export default function Home() {
       socket.close();
     };
   }, [viewMode]);
+
+  // Initialize animated positions for vehicles when they first appear
+  useEffect(() => {
+    vehicles.forEach(v => {
+      if (!animatedVehiclesRef.current.has(v.id)) {
+        animatedVehiclesRef.current.set(v.id, { lat: v.lat, lng: v.lng });
+      }
+    });
+    setAnimatedVehicles(new Map(animatedVehiclesRef.current));
+  }, [vehicles.length]); // Initialize when vehicle count changes
 
   // Fetch medical vehicles when in medical mode
   useEffect(() => {
@@ -731,33 +797,36 @@ export default function Home() {
     return `${baseUrl}?${params.toString()}`;
   };
 
-  // Generate paths from all vehicles and coordinates to shared location
+  // Generate paths from all vehicles' current animated positions to shared location
   const generatePaths = useCallback(() => {
     if (!sharedLocation) return null;
 
-    const allPoints: Array<{ lat: number; lng: number }> = [
-      ...vehicles.map(v => ({ lat: v.lat, lng: v.lng })),
-      ...coordinates.map(c => ({ lat: c.lat, lng: c.lng })),
-    ];
+    if (vehicles.length === 0) return null;
 
-    if (allPoints.length === 0) return null;
+    // Draw lines from all vehicles to shared location, using their animated positions
+    const paths = vehicles.map(vehicle => {
+      // Use animated position if available (so line follows vehicle as it moves), otherwise use actual position
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const vehicleLat = animatedPos?.lat ?? vehicle.lat;
+      const vehicleLng = animatedPos?.lng ?? vehicle.lng;
 
-    const paths = allPoints.map(point => ({
-      type: 'Feature' as const,
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: [
-          [point.lng, point.lat],
-          [sharedLocation.lng, sharedLocation.lat],
-        ],
-      },
-    }));
+      return {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'LineString' as const,
+          coordinates: [
+            [vehicleLng, vehicleLat],
+            [sharedLocation.lng, sharedLocation.lat],
+          ],
+        },
+      };
+    });
 
     return {
       type: 'FeatureCollection' as const,
       features: paths,
     };
-  }, [vehicles, coordinates, sharedLocation]);
+  }, [vehicles, sharedLocation, animatedVehicles]);
 
   const pathsData = generatePaths();
 
@@ -1374,8 +1443,14 @@ export default function Home() {
 
         {/* Vehicle markers - 2D markers for all vehicles */}
         {/* Show all vehicles in both modes */}
-        {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
-          <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
+        {mapLoaded && vehicles.length > 0 && vehicles.map(v => {
+          // Use animated position if available, otherwise use actual position
+          const animatedPos = animatedVehicles.get(v.id);
+          const displayLat = animatedPos?.lat ?? v.lat;
+          const displayLng = animatedPos?.lng ?? v.lng;
+          
+          return (
+          <Marker key={v.id} longitude={displayLng} latitude={displayLat}>
             <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
               <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${v.status === 'on_duty'
                 ? 'bg-rose-500 shadow-rose-500/40'
@@ -1394,7 +1469,8 @@ export default function Home() {
               )}
             </div>
           </Marker>
-        ))}
+          );
+        })}
 
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
@@ -1480,7 +1556,7 @@ export default function Home() {
       </div>
       <div
         ref={sidebarRef}
-        className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-6 top-6' : ''}`}
+        className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-4 top-[180px]' : ''}`}
         style={{
           left: sidebarPosition ? sidebarPosition.x : undefined,
           top: sidebarPosition ? sidebarPosition.y : undefined,
@@ -1642,15 +1718,26 @@ export default function Home() {
       {process.env.NODE_ENV === 'development' && (
         <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
           <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
-          <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => !v.status || v.status === 'vacant').length})</div>
+          <div>
+            Vehicles: {vehicles.length} (on_duty:{' '}
+            {vehicles.filter(v => v.status === 'on_duty').length}, vacant:{' '}
+            {vehicles.filter(v => !v.status || v.status === 'vacant').length})
+          </div>
           {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
           <div>Coordinates: {coordinates.length}</div>
+          <div>
+            Clicked:{' '}
+            {clickedCoord
+              ? `${clickedCoord.lat.toFixed(5)}, ${clickedCoord.lng.toFixed(5)}`
+              : 'none'}
+          </div>
           <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
           {vehicles.length > 0 && (
             <div className="mt-1">
               {vehicles.map(v => (
                 <div key={v.id}>
-                  {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} ({v.status || 'unknown'})
+                  {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} (
+                  {v.status || 'unknown'})
                 </div>
               ))}
             </div>
@@ -1692,6 +1779,68 @@ export default function Home() {
                 Lock Vehicle (Test)
               </>
             )}
+          </button>
+        )}
+        {viewMode === 'medical' && (
+          <button
+            onClick={() => {
+              const map = mapRef.current?.getMap();
+              if (!map) return;
+
+              // Default Philly view
+              const phillyView = {
+                longitude: -75.16,
+                latitude: 39.95,
+                zoom: 12,
+                pitch: mapStyle === 'street' ? 45 : 0,
+                bearing: 0
+              };
+
+              if (isEarthView) {
+                // Switch to Philly view
+                map.flyTo({
+                  center: [phillyView.longitude, phillyView.latitude],
+                  zoom: phillyView.zoom,
+                  pitch: phillyView.pitch,
+                  bearing: phillyView.bearing,
+                  duration: 2000,
+                });
+                setIsEarthView(false);
+              } else {
+                // Switch to earth view
+                map.flyTo({
+                  center: [0, 0], // Center of the world
+                  zoom: 1.5,
+                  pitch: 0,
+                  bearing: 0,
+                  duration: 2000,
+                });
+                setIsEarthView(true);
+              }
+            }}
+            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isEarthView
+              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
+              : 'bg-blue-500 text-white hover:bg-blue-600 shadow-blue-500/30'
+              }`}
+          >
+            <span className="flex items-center gap-2">
+              {isEarthView ? (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Philly View
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Earth View
+                </>
+              )}
+            </span>
           </button>
         )}
       </div>
