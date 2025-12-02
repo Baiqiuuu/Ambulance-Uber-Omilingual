@@ -151,6 +151,9 @@ export default function Home() {
     startTime: number;
     duration: number;
   }>>(new Map());
+  
+  // Vehicle destinations (where they're going to)
+  const [vehicleDestinations, setVehicleDestinations] = useState<Map<string, { lat: number; lng: number }>>(new Map());
 
   // Find A1 ID to trigger effect only when A1 is created/deleted
   const a1Id = useMemo(() => vehicles.find(v => v.name === 'A1')?.id, [vehicles]);
@@ -240,6 +243,13 @@ export default function Home() {
           const startLat = currentAnimated?.lat ?? existing.lat;
           const startLng = currentAnimated?.lng ?? existing.lng;
           
+          // Set destination (where vehicle is going to)
+          setVehicleDestinations(prev => {
+            const newMap = new Map(prev);
+            newMap.set(v.id, { lat: v.lat, lng: v.lng });
+            return newMap;
+          });
+          
           vehicleAnimationsRef.current.set(v.id, {
             startLat,
             startLng,
@@ -309,12 +319,20 @@ export default function Home() {
     };
   }, [viewMode]);
 
-  // Initialize animated positions for vehicles when they first appear
+  // Initialize animated positions and destinations for vehicles when they first appear
   useEffect(() => {
     vehicles.forEach(v => {
       if (!animatedVehiclesRef.current.has(v.id)) {
         animatedVehiclesRef.current.set(v.id, { lat: v.lat, lng: v.lng });
       }
+      // Set initial destination to current position
+      setVehicleDestinations(prev => {
+        const newMap = new Map(prev);
+        if (!newMap.has(v.id)) {
+          newMap.set(v.id, { lat: v.lat, lng: v.lng });
+        }
+        return newMap;
+      });
     });
     setAnimatedVehicles(new Map(animatedVehiclesRef.current));
   }, [vehicles.length]); // Initialize when vehicle count changes
@@ -812,14 +830,14 @@ export default function Home() {
       const vehicleLng = animatedPos?.lng ?? vehicle.lng;
 
       return {
-        type: 'Feature' as const,
-        geometry: {
-          type: 'LineString' as const,
-          coordinates: [
+      type: 'Feature' as const,
+      geometry: {
+        type: 'LineString' as const,
+        coordinates: [
             [vehicleLng, vehicleLat],
-            [sharedLocation.lng, sharedLocation.lat],
-          ],
-        },
+          [sharedLocation.lng, sharedLocation.lat],
+        ],
+      },
       };
     });
 
@@ -833,6 +851,7 @@ export default function Home() {
 
   // Calculate nearest OR tracked ambulance distance
   // If a vehicle is selected/tracked, we show that one. Otherwise nearest available.
+  // Uses animated position (current location) for all calculations
   const displayedAmbulance = useMemo(() => {
     if (!clickedCoord || vehicles.length === 0) return null;
 
@@ -840,8 +859,13 @@ export default function Home() {
     if (selectedVehicle) {
       const tracked = vehicles.find(v => v.id === selectedVehicle.id);
       if (tracked) {
-        const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, tracked.lat, tracked.lng);
-        return { ...tracked, distance: dist, type: 'tracked' };
+        // Use animated position (current location) for distance calculation
+        const animatedPos = animatedVehicles.get(tracked.id);
+        const currentLat = animatedPos?.lat ?? tracked.lat;
+        const currentLng = animatedPos?.lng ?? tracked.lng;
+        const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
+        const destination = vehicleDestinations.get(tracked.id);
+        return { ...tracked, currentLat, currentLng, destination, distance: dist, type: 'tracked' };
       }
     }
 
@@ -852,15 +876,20 @@ export default function Home() {
     let closest = null;
 
     availableVehicles.forEach(v => {
-      const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, v.lat, v.lng);
+      // Use animated position (current location) for distance calculation
+      const animatedPos = animatedVehicles.get(v.id);
+      const currentLat = animatedPos?.lat ?? v.lat;
+      const currentLng = animatedPos?.lng ?? v.lng;
+      const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
       if (dist < minDist) {
         minDist = dist;
-        closest = { ...v, distance: dist, type: 'nearest' };
+        const destination = vehicleDestinations.get(v.id);
+        closest = { ...v, currentLat, currentLng, destination, distance: dist, type: 'nearest' };
       }
     });
 
     return closest;
-  }, [clickedCoord, vehicles, selectedVehicle]);
+  }, [clickedCoord, vehicles, selectedVehicle, animatedVehicles, vehicleDestinations]);
 
   // Add 3D buildings layer helper function
   const add3DBuildings = useCallback((map: MapboxMap) => {
@@ -1091,6 +1120,46 @@ export default function Home() {
   }, [isDragging, dragStart, sidebarCollapsed]);
 
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
+
+  // Calculate sorted ambulances by availability and distance
+  // Uses animated position (current location) for all calculations
+  const sortedAmbulances = useMemo(() => {
+    if (!clickedCoord || vehicles.length === 0) return [];
+
+    const ambulancesWithDistance = vehicles.map(vehicle => {
+      // Use animated position (current location) for distance calculations
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const currentLat = animatedPos?.lat ?? vehicle.lat;
+      const currentLng = animatedPos?.lng ?? vehicle.lng;
+      
+      // getDistanceFromLatLonInKm returns meters, convert to km for sorting
+      const distMeters = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
+      const distKm = distMeters / 1000;
+      
+      // Get destination if available
+      const destination = vehicleDestinations.get(vehicle.id);
+      
+      return {
+        ...vehicle,
+        currentLat,
+        currentLng,
+        destination,
+        distanceKm: distKm,
+        distanceMeters: Math.round(distMeters),
+        isAvailable: vehicle.status === 'vacant' || !vehicle.status || vehicle.status === 'vacant',
+      };
+    });
+
+    // Sort: available first (by distance), then unavailable (by distance)
+    return ambulancesWithDistance.sort((a, b) => {
+      // First sort by availability (available first)
+      if (a.isAvailable !== b.isAvailable) {
+        return a.isAvailable ? -1 : 1;
+      }
+      // Then sort by distance
+      return a.distanceKm - b.distanceKm;
+    });
+  }, [clickedCoord, vehicles, animatedVehicles, vehicleDestinations]);
 
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -1716,7 +1785,58 @@ export default function Home() {
               </div>
             )}
 
-            {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
+            {/* Ambulances list */}
+            {clickedCoord && sortedAmbulances.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Ambulances</p>
+                <ul className="space-y-2 p-2">
+                  {sortedAmbulances.map((ambulance, idx) => (
+                    <li
+                      key={ambulance.id}
+                      className={`group relative border rounded-xl px-4 py-3 hover:shadow-lg transition-all duration-300 cursor-pointer ${
+                        ambulance.isAvailable
+                          ? 'bg-emerald-50 border-emerald-100 hover:border-emerald-200 hover:shadow-emerald-500/10'
+                          : 'bg-rose-50 border-rose-100 hover:border-rose-200 hover:shadow-rose-500/10'
+                      }`}
+                    >
+                      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity ${
+                        ambulance.isAvailable ? 'bg-emerald-500' : 'bg-rose-500'
+                      }`}></div>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-800 truncate pr-2">{ambulance.name || `Vehicle ${ambulance.id.slice(0, 8)}`}</span>
+                          <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+                            ambulance.isAvailable
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-rose-100 text-rose-700'
+                          }`}>
+                            {ambulance.isAvailable ? 'AVAILABLE' : 'BUSY'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded-md">#{idx + 1}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className={`text-xs font-medium ${
+                          ambulance.isAvailable ? 'text-emerald-600' : 'text-rose-600'
+                        }`}>
+                          {formatDistance(ambulance.distanceMeters)}
+                        </div>
+                        {ambulance.destination && (
+                          <div className="text-[10px] text-slate-400 italic">
+                            → {ambulance.destination.lat.toFixed(4)}, {ambulance.destination.lng.toFixed(4)}
+                          </div>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Language points - only show in medical mode */}
+            {viewMode === 'medical' && clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
+              <div>
+                <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-2 px-2">Language Points</p>
               <ul className="space-y-2 p-2">
                 {nearest!.map((location, idx) => (
                   <li
@@ -1737,8 +1857,9 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
+              </div>
             )}
-            {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
+            {clickedCoord && !nearestLoading && !nearestError && sortedAmbulances.length === 0 && (!hasNearestData || viewMode === 'user') && (
               <p className="text-slate-500 text-center py-8">No data available nearby.</p>
             )}
           </div>
