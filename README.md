@@ -4,6 +4,9 @@ Emergency Medical Services Dispatch System
 
 A full-stack monorepo application with web, desktop (Electron), and backend services.
 
+## Demo Video
+https://dropover.cloud/3b5ba5
+
 ## Tech Stack
 
 - **Frontend**: Next.js 14 (TypeScript, Tailwind CSS)
