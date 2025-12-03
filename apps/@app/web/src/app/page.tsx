@@ -20,7 +20,18 @@ type NearestLocation = {
 };
 type Vehicle = { id: string; lat: number; lng: number; status?: string; name?: string };
 type Coordinate = { id: string; lat: number; lng: number };
-type Incident = { id: string; lat: number; lng: number; message?: string; timestamp?: number; assignedAmbulanceId?: string; resolved?: boolean };
+type Incident = { 
+  id: string; 
+  lat: number; 
+  lng: number; 
+  message?: string; 
+  timestamp?: number; 
+  assignedAmbulanceId?: string; 
+  resolved?: boolean; 
+  liveInformation?: string;
+  ambulanceName?: string;
+  arrivedAt?: number;
+};
 type Hospital = { lat: number; lng: number; icon: string };
 type MedicalVehicle = {
   id: string;
@@ -68,18 +79,9 @@ export default function Home() {
     incidentId: string; 
     phase: 'going' | 'waiting' | 'returning'; 
     waitStartTime?: number;
-    incidentData?: { lat: number; lng: number; message?: string; timestamp?: number };
+    incidentData?: { lat: number; lng: number; message?: string; timestamp?: number; liveInformation?: string };
   }>>(new Map());
-  const [incidentsAtHospital, setIncidentsAtHospital] = useState<Array<{ 
-    id: string; 
-    lat: number; 
-    lng: number; 
-    message?: string; 
-    timestamp?: number;
-    ambulanceId: string;
-    ambulanceName?: string;
-    arrivedAt?: number;
-  }>>([]);
+  // Removed incidentsAtHospital - all incidents are now in the incidents array
   const [aeds, setAeds] = useState<AED[]>([]);
   const [showAEDs, setShowAEDs] = useState(true);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -103,6 +105,7 @@ export default function Home() {
   const [showAddCoordinatePanel, setShowAddCoordinatePanel] = useState(false);
   const [incidentLat, setIncidentLat] = useState('');
   const [incidentLng, setIncidentLng] = useState('');
+  const [pickingIncidentLocation, setPickingIncidentLocation] = useState(false);
   const [incidentMessage, setIncidentMessage] = useState('');
   const [newCoordLat, setNewCoordLat] = useState('');
   const [newCoordLng, setNewCoordLng] = useState('');
@@ -196,8 +199,8 @@ export default function Home() {
   }>>(new Map());
   
   // Vehicle destinations (where they're going to)
-  const [vehicleDestinations, setVehicleDestinations] = useState<Map<string, { lat: number; lng: number }>>(new Map());
-  const vehicleDestinationsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
+  const [vehicleDestinations, setVehicleDestinations] = useState<Map<string, { lat: number; lng: number; duration?: number }>>(new Map());
+  const vehicleDestinationsRef = useRef<Map<string, { lat: number; lng: number; duration?: number }>>(new Map());
   const calculatedRoutesRef = useRef<Map<string, { start: { lat: number; lng: number }; end: { lat: number; lng: number } }>>(new Map());
 
   // Find A1 ID to trigger effect only when A1 is created/deleted
@@ -300,6 +303,21 @@ export default function Home() {
           if (destinationChanged) {
             setVehicleDestinations(prev => {
               const newMap = new Map(prev);
+              // Preserve existing duration if destination coordinates are close (for returning to hospital)
+              const existingDestination = prev.get(v.id);
+              if (existingDestination?.duration) {
+                // If existing destination has a duration, preserve it if coordinates are close
+                const coordsMatch = Math.abs(existingDestination.lat - newDestination.lat) < 0.0001 &&
+                                    Math.abs(existingDestination.lng - newDestination.lng) < 0.0001;
+                if (coordsMatch) {
+                  // Coordinates match, preserve duration
+                  newMap.set(v.id, { ...newDestination, duration: existingDestination.duration });
+                  vehicleDestinationsRef.current = newMap;
+                  calculatedRoutesRef.current.delete(v.id);
+                  return newMap;
+                }
+              }
+              // No existing duration or coordinates don't match, use new destination
               newMap.set(v.id, newDestination);
               vehicleDestinationsRef.current = newMap;
               // Clear calculated route for this vehicle so it gets recalculated
@@ -321,13 +339,14 @@ export default function Home() {
           }
           
           // Create animation object
+          const destination = vehicleDestinationsRef.current.get(v.id);
           const animObj = {
             startLat,
             startLng,
             endLat: v.lat,
             endLng: v.lng,
             startTime: performance.now(),
-            duration: 14000, // 14s animation to match the 15s update interval
+            duration: destination?.duration ?? 14000, // Use destination duration if set, otherwise default to 14s
             routePath: routePath,
           };
           
@@ -513,13 +532,45 @@ export default function Home() {
                Math.abs(inc.timestamp - data.timestamp) < 3000);
             
             if (isMatch) {
-              // Merge: prefer data with ID and message if available
+              // Merge: preserve original message, update liveInformation separately
+              // Only include fields that are explicitly provided (not undefined)
+              const updates: Partial<Incident> = {
+                id: data.id || inc.id,
+                lat: data.lat,
+                lng: data.lng,
+                timestamp: data.timestamp || inc.timestamp || Date.now(),
+              };
+              
+              // Only update message if it's explicitly provided and not undefined
+              if (data.message !== undefined) {
+                updates.message = data.message;
+              } else {
+                updates.message = inc.message; // Preserve original
+              }
+              
+              // Update liveInformation if provided
+              if (data.liveInformation !== undefined) {
+                updates.liveInformation = data.liveInformation;
+              } else {
+                updates.liveInformation = inc.liveInformation; // Preserve existing
+              }
+              
+              // Preserve other fields
+              if (data.assignedAmbulanceId !== undefined) {
+                updates.assignedAmbulanceId = data.assignedAmbulanceId;
+              } else {
+                updates.assignedAmbulanceId = inc.assignedAmbulanceId;
+              }
+              
+              if (data.resolved !== undefined) {
+                updates.resolved = data.resolved;
+              } else {
+                updates.resolved = inc.resolved;
+              }
+              
               return {
                 ...inc,
-                ...data,
-                id: data.id || inc.id, // Prefer new ID if available
-                message: data.message || inc.message, // Prefer new message if available (merge, don't require match)
-                timestamp: data.timestamp || inc.timestamp || Date.now(),
+                ...updates,
               };
             }
             return inc;
@@ -1031,7 +1082,7 @@ export default function Home() {
     }
   }, [medicalVehicles, hospital]);
 
-  // Calculate ETA for returning ambulance (distance / average speed)
+  // Calculate ETA for returning ambulance (distance-based time estimate)
   const calculateETA = useCallback((ambulanceId: string, assignment: { incidentId: string; phase: 'going' | 'waiting' | 'returning' }) => {
     const ambulance = vehicles.find(v => v.id === ambulanceId);
     if (!ambulance || assignment.phase !== 'returning') return null;
@@ -1042,11 +1093,16 @@ export default function Home() {
     
     if (!currentLat || !currentLng) return null;
     
-    const distance = getDistanceFromLatLonInKm(hospital.lat, hospital.lng, currentLat, currentLng);
-    // Average ambulance speed: ~60 km/h in city, ~80 km/h on highway, use 50 km/h as conservative estimate
+    // Get distance in meters (function returns meters despite name)
+    const distanceMeters = getDistanceFromLatLonInKm(hospital.lat, hospital.lng, currentLat, currentLng);
+    // Convert to kilometers
+    const distanceKm = distanceMeters / 1000;
+    
+    // General time relationship: average ambulance speed in urban areas is ~50 km/h
+    // Time (minutes) = Distance (km) / Speed (km/h) * 60
+    // Using 50 km/h as a reasonable average for city driving
     const averageSpeedKmh = 50;
-    const etaHours = distance / averageSpeedKmh;
-    const etaMinutes = Math.ceil(etaHours * 60);
+    const etaMinutes = Math.ceil((distanceKm / averageSpeedKmh) * 60);
     
     return etaMinutes;
   }, [vehicles, animatedVehicles, hospital]);
@@ -1084,8 +1140,17 @@ export default function Home() {
             lng: incident.lng,
             message: incident.message,
             timestamp: incident.timestamp,
+            liveInformation: incident.liveInformation,
           }
         });
+        return newMap;
+      });
+      
+      // Set destination to incident with 1 minute duration
+      setVehicleDestinations(prev => {
+        const newMap = new Map(prev);
+        newMap.set(ambulanceId, { lat: incident.lat, lng: incident.lng, duration: 15000 });
+        vehicleDestinationsRef.current = newMap;
         return newMap;
       });
       
@@ -1135,9 +1200,8 @@ export default function Home() {
           );
           
           if (distanceToIncident < 0.0001) { // ~10 meters
-            // Ambulance reached incident, remove it from incidents list and start waiting
-            setIncidents(prev => prev.filter(inc => inc.id !== assignment.incidentId));
-            
+            // Ambulance reached incident, keep it visible but mark as "at scene"
+            // Don't remove the incident - it should remain visible
             setAmbulanceIncidentAssignments(prev => {
               const newMap = new Map(prev);
               newMap.set(ambulanceId, { ...assignment, phase: 'waiting', waitStartTime: Date.now() });
@@ -1147,25 +1211,38 @@ export default function Home() {
         } else if (assignment.phase === 'waiting') {
           // Check if 2 seconds have passed
           const waitDuration = assignment.waitStartTime ? Date.now() - assignment.waitStartTime : 0;
-          if (waitDuration >= 2000) {
+          if (waitDuration >= 1500) {
             // Wait complete, send ambulance back to hospital
             const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
             
-            fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/location`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                latitude: hospital.lat,
-                longitude: hospital.lng,
-              }),
-            }).then(() => {
-              // Update assignment phase to returning (incident already removed when reached scene)
-              setAmbulanceIncidentAssignments(prev => {
+              // Set destination to hospital with duration BEFORE making API call
+              // This ensures duration is set before server sends telemetry update
+              const destinationWithDuration = { lat: hospital.lat, lng: hospital.lng, duration: 100000 };
+              setVehicleDestinations(prev => {
                 const newMap = new Map(prev);
-                newMap.set(ambulanceId, { ...assignment, phase: 'returning' });
+                newMap.set(ambulanceId, destinationWithDuration);
+                vehicleDestinationsRef.current = newMap;
                 return newMap;
               });
-            });
+              
+            // Small delay to ensure state/ref is updated before API call triggers server update
+            setTimeout(() => {
+              fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/location`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  latitude: hospital.lat,
+                  longitude: hospital.lng,
+                }),
+              }).then(() => {
+                // Update assignment phase to returning (incident remains visible)
+                setAmbulanceIncidentAssignments(prev => {
+                  const newMap = new Map(prev);
+                  newMap.set(ambulanceId, { ...assignment, phase: 'returning' });
+                  return newMap;
+                });
+              });
+            }, 50);
           }
         } else if (assignment.phase === 'returning') {
           // Check if ambulance has returned to hospital
@@ -1175,19 +1252,19 @@ export default function Home() {
           );
           
           if (distanceToHospital < 0.0001) { // ~10 meters
-            // Ambulance returned, add incident to hospital records and clear assignment
-            if (assignment.incidentData) {
-              setIncidentsAtHospital(prev => [...prev, {
-                id: assignment.incidentId,
-                lat: assignment.incidentData!.lat,
-                lng: assignment.incidentData!.lng,
-                message: assignment.incidentData!.message,
-                timestamp: assignment.incidentData!.timestamp,
-                ambulanceId: ambulanceId,
-                ambulanceName: ambulance.name,
-                arrivedAt: Date.now(),
-              }]);
-            }
+            // Ambulance returned, mark incident as resolved and store hospital info in the incident
+            setIncidents(prev => prev.map(inc => 
+              inc.id === assignment.incidentId 
+                ? { 
+                    ...inc, 
+                    resolved: true, 
+                    assignedAmbulanceId: undefined, // Clear assignment
+                    ambulanceName: ambulance.name, // Store ambulance name for reference
+                    arrivedAt: Date.now(), // Store arrival time
+                    // Preserve all existing data including liveInformation
+                  }
+                : inc
+            ));
             
             const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
             fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/status`, {
@@ -1220,12 +1297,22 @@ export default function Home() {
     return `${baseUrl}?${params.toString()}`;
   };
 
-  // Generate paths from all vehicles' current animated positions to all incidents
+  // Generate paths from all vehicles' current animated positions to active incidents (user mode only)
   const generatePaths = useCallback(() => {
-    if (incidents.length === 0) return null;
+    // Only show cyan lines in user mode
+    if (viewMode !== 'user') return null;
+    
+    // Filter to only active incidents (not resolved, not returning)
+    const activeIncidents = incidents.filter(inc => {
+      if (inc.resolved) return false;
+      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+      return assignment?.phase !== 'returning';
+    });
+    
+    if (activeIncidents.length === 0) return null;
     if (vehicles.length === 0) return null;
 
-    // Draw lines from all vehicles to all incidents, using their animated positions
+    // Draw lines from all vehicles to active incidents, using their animated positions
     const paths: Array<{ type: 'Feature'; geometry: { type: 'LineString'; coordinates: Array<[number, number]> } }> = [];
     
     vehicles.forEach(vehicle => {
@@ -1234,8 +1321,8 @@ export default function Home() {
       const vehicleLat = animatedPos?.lat ?? vehicle.lat;
       const vehicleLng = animatedPos?.lng ?? vehicle.lng;
 
-      // Draw a line to each incident
-      incidents.forEach(incident => {
+      // Draw a line to each active incident
+      activeIncidents.forEach(incident => {
         paths.push({
       type: 'Feature' as const,
       geometry: {
@@ -1253,7 +1340,7 @@ export default function Home() {
       type: 'FeatureCollection' as const,
       features: paths,
     };
-  }, [vehicles, incidents, animatedVehicles]);
+  }, [vehicles, incidents, animatedVehicles, viewMode, ambulanceIncidentAssignments]);
 
   const pathsData = generatePaths();
 
@@ -1621,6 +1708,11 @@ export default function Home() {
     if (isPickingLocation) {
       // In picking mode, register ambulance at location
       registerAmbulance(lngLat.lat, lngLat.lng);
+    } else if (pickingIncidentLocation) {
+      // In incident location picking mode, fill in the coordinates
+      setIncidentLat(lngLat.lat.toFixed(6));
+      setIncidentLng(lngLat.lng.toFixed(6));
+      setPickingIncidentLocation(false);
     } else if (editingLocationVehicleId) {
       // In location edit mode, update the vehicle's location
       try {
@@ -1655,7 +1747,7 @@ export default function Home() {
       // Normal mode: set clicked coord for query
       setClickedCoord({ lat: lngLat.lat, lng: lngLat.lng });
     }
-  }, [isPickingLocation, registerAmbulance, editingLocationVehicleId]);
+  }, [isPickingLocation, registerAmbulance, pickingIncidentLocation, editingLocationVehicleId]);
 
   useEffect(() => {
     if (!clickedCoord) {
@@ -1900,25 +1992,10 @@ export default function Home() {
     }
   }, [add3DBuildings, addTrafficLayer]);
 
-  // Language detection handlers
+  // Language detection handlers - redirects to incident transcription page
   const toggleLanguageDetection = async () => {
-    if (isRecording) {
-      // Stop recording
-      stopRecording();
-    } else if (showLanguagePanel) {
-      // Panel is open but not recording, close it
-      setShowLanguagePanel(false);
-      setIsPanelMinimized(false);
-    } else {
-      // Open panel and start recording
-      setShowLanguagePanel(true);
-      setIsPanelMinimized(false);
-      setLanguageError(null);
-      setDetectedLanguages([]);
-      setTranslationHistory([]);
-      // Start recording after a brief delay to let panel open
-      setTimeout(() => startRecording(), 100);
-    }
+    // Redirect to incident transcription page
+    window.open('/incident-transcription', '_blank');
   };
 
   const startRecording = async () => {
@@ -2059,6 +2136,37 @@ export default function Home() {
     }
   };
 
+  // Process transcript to extract important details for incident
+  const processIncidentTranscript = async (transcript: string, incidentId: string) => {
+    try {
+      const response = await fetch('/api/extract-incident-details', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ transcript }),
+      });
+
+      const result = await response.json();
+      
+      if (result.success && result.importantDetails) {
+        // Update the incident with the live information
+        setIncidents(prev => prev.map(inc => {
+          if (inc.id === incidentId) {
+            const existingInfo = inc.liveInformation || '';
+            const newInfo = existingInfo 
+              ? `${existingInfo}\n\n[${new Date().toLocaleTimeString()}] ${result.importantDetails}`
+              : `[${new Date().toLocaleTimeString()}] ${result.importantDetails}`;
+            return { ...inc, liveInformation: newInfo };
+          }
+          return inc;
+        }));
+      }
+    } catch (error) {
+      console.error('Error processing incident transcript:', error);
+    }
+  };
+
   // Panel dragging handlers
   const handleLanguagePanelMouseDown = useCallback((e: React.MouseEvent) => {
     if (languagePanelRef.current) {
@@ -2138,7 +2246,7 @@ export default function Home() {
   }
 
   return (
-    <div className={`h-screen w-screen relative ${isPickingLocation || editingLocationVehicleId ? 'cursor-crosshair' : ''}`}>
+    <div className={`h-screen w-screen relative ${isPickingLocation || editingLocationVehicleId || pickingIncidentLocation ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
         initialViewState={{
@@ -2467,7 +2575,11 @@ export default function Home() {
         </Marker>
 
         {/* Incident markers with messages */}
-        {incidents.filter(inc => !inc.resolved).map(incident => (
+        {incidents.filter(inc => {
+          if (inc.resolved) return false;
+          const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+          return assignment?.phase !== 'returning';
+        }).map(incident => (
           <Marker key={incident.id} longitude={incident.lng} latitude={incident.lat}>
             <div className="relative group">
               <div className="bg-rose-500 w-5 h-5 rounded-full border-2 border-white shadow-lg shadow-rose-500/40 animate-bounce"></div>
@@ -2627,11 +2739,19 @@ export default function Home() {
             )}
 
             {/* Incidents list - show in medical mode */}
-            {viewMode === 'medical' && incidents.filter(inc => !inc.resolved).length > 0 && (
+            {viewMode === 'medical' && incidents.filter(inc => {
+              if (inc.resolved) return false;
+              const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+              return assignment?.phase !== 'returning';
+            }).length > 0 && (
               <div className="mb-4">
                 <p className="text-xs font-bold text-rose-500 uppercase tracking-wider mb-2 px-2">Incidents</p>
                 <ul className="space-y-2 p-2">
-                  {incidents.filter(inc => !inc.resolved).map((incident, idx) => {
+                  {incidents.filter(inc => {
+                    if (inc.resolved) return false;
+                    const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                    return assignment?.phase !== 'returning';
+                  }).map((incident, idx) => {
                     // Find closest available ambulance
                     const availableAmbulances = sortedAmbulances.filter(amb => amb.isAvailable);
                     const closestAmbulance = availableAmbulances.length > 0 ? availableAmbulances[0] : null;
@@ -2801,11 +2921,23 @@ export default function Home() {
               <div>
                 <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full bg-rose-500"></span>
-                  Active Incidents ({incidents.filter(inc => !inc.resolved).length})
+                  Active Incidents ({incidents.filter(inc => {
+                    if (inc.resolved) return false;
+                    const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                    return assignment?.phase !== 'returning';
+                  }).length})
                 </h3>
-                {incidents.filter(inc => !inc.resolved).length > 0 ? (
+                {incidents.filter(inc => {
+                  if (inc.resolved) return false;
+                  const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                  return assignment?.phase !== 'returning';
+                }).length > 0 ? (
                   <div className="space-y-3">
-                    {incidents.filter(inc => !inc.resolved).map((incident, idx) => {
+                    {incidents.filter(inc => {
+                      if (inc.resolved) return false;
+                      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                      return assignment?.phase !== 'returning';
+                    }).map((incident, idx) => {
                       const assignment = incident.assignedAmbulanceId 
                         ? ambulanceIncidentAssignments.get(incident.assignedAmbulanceId)
                         : null;
@@ -2819,6 +2951,7 @@ export default function Home() {
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
                                 <span className="font-bold text-slate-800">Incident #{idx + 1}</span>
+                                <span className="text-xs text-slate-400 font-mono">({incident.id})</span>
                                 {assignment && (
                                   <span className={`text-xs font-bold px-2 py-1 rounded-full ${
                                     assignment.phase === 'going' ? 'bg-blue-100 text-blue-700' :
@@ -2831,6 +2964,12 @@ export default function Home() {
                               </div>
                               {incident.message && (
                                 <div className="text-sm text-slate-600 italic mb-2">"{incident.message}"</div>
+                              )}
+                              {incident.liveInformation && (
+                                <div className="bg-white border border-rose-300 rounded-lg p-3 mt-2 mb-2">
+                                  <div className="text-xs font-bold text-rose-700 uppercase tracking-wider mb-1">Live Information</div>
+                                  <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                                </div>
                               )}
                               <div className="text-xs text-slate-500 font-mono">
                                 {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
@@ -2869,20 +3008,24 @@ export default function Home() {
                       .map(([ambulanceId, assignment]) => {
                         const ambulance = vehicles.find(v => v.id === ambulanceId);
                         const eta = calculateETA(ambulanceId, assignment);
+                        // Get the incident from the incidents array to get the latest data including liveInformation
+                        const incident = incidents.find(inc => inc.id === assignment.incidentId);
                         
                         return (
                           <div key={ambulanceId} className="bg-green-50 border border-green-200 rounded-xl p-4">
-                            <div className="flex items-center justify-between">
-                              <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex-1">
                                 <div className="font-bold text-slate-800 mb-1">
                                   {ambulance?.name || `Vehicle ${ambulanceId.slice(0, 8)}`}
                                 </div>
-                                {assignment.incidentData?.message && (
-                                  <div className="text-sm text-slate-600 italic mb-1">"{assignment.incidentData.message}"</div>
+                                {incident?.message && (
+                                  <div className="text-sm text-slate-600 italic mb-1">"{incident.message}"</div>
                                 )}
-                                <div className="text-xs text-slate-500">
-                                  From: {assignment.incidentData?.lat.toFixed(5)}, {assignment.incidentData?.lng.toFixed(5)}
-                                </div>
+                                {incident && (
+                                  <div className="text-xs text-slate-500">
+                                    From: {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                                  </div>
+                                )}
                               </div>
                               <div className="text-right">
                                 <div className="text-lg font-bold text-green-600">
@@ -2891,6 +3034,12 @@ export default function Home() {
                                 <div className="text-xs text-slate-500">ETA</div>
                               </div>
                             </div>
+                            {incident?.liveInformation && (
+                              <div className="bg-white border border-green-300 rounded-lg p-3 mt-2">
+                                <div className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1">Live Information</div>
+                                <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -2904,11 +3053,11 @@ export default function Home() {
               <div>
                 <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
                   <span className="w-3 h-3 rounded-full bg-blue-500"></span>
-                  In Emergency Room ({incidentsAtHospital.length})
+                  In Emergency Room ({incidents.filter(inc => inc.resolved).length})
                 </h3>
-                {incidentsAtHospital.length > 0 ? (
+                {incidents.filter(inc => inc.resolved).length > 0 ? (
                   <div className="space-y-3">
-                    {incidentsAtHospital.map((incident, idx) => (
+                    {incidents.filter(inc => inc.resolved).map((incident: Incident, idx: number) => (
                       <div key={incident.id} className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1">
@@ -2921,12 +3070,20 @@ export default function Home() {
                             {incident.message && (
                               <div className="text-sm text-slate-600 italic mb-2">"{incident.message}"</div>
                             )}
+                            {incident.liveInformation && (
+                              <div className="bg-white border border-blue-300 rounded-lg p-3 mt-2 mb-2">
+                                <div className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Live Information</div>
+                                <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                              </div>
+                            )}
                             <div className="text-xs text-slate-500 font-mono mb-1">
                               Location: {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
                             </div>
-                            <div className="text-xs text-blue-600 font-medium">
-                              Brought by: {incident.ambulanceName || `Vehicle ${incident.ambulanceId.slice(0, 8)}`}
-                            </div>
+                            {incident.ambulanceName && (
+                              <div className="text-xs text-blue-600 font-medium">
+                                Brought by: {incident.ambulanceName}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3127,7 +3284,7 @@ export default function Home() {
             {isRecording ? (
               <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg> Stop Recording</>
             ) : (
-              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Detect Language</>
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Start Transcription</>
             )}
           </span>
         </button>
@@ -3180,12 +3337,29 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2">
             <button
               onClick={getCurrentLocation}
-              className="w-full px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
+                className="px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Get Current Location
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Share Location
             </button>
+              <button
+                onClick={() => setPickingIncidentLocation(!pickingIncidentLocation)}
+                className={`px-4 py-3 rounded-2xl font-bold shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 ${
+                  pickingIncidentLocation 
+                    ? 'bg-green-600 text-white shadow-green-500/20 hover:bg-green-700' 
+                    : 'bg-indigo-600 text-white shadow-indigo-500/20 hover:bg-indigo-700'
+                }`}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> {pickingIncidentLocation ? 'Click Map' : 'Pick from Map'}
+              </button>
+            </div>
+            {pickingIncidentLocation && (
+              <div className="px-4 py-2 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 text-center">
+                Click on the map to select location
+              </div>
+            )}
 
             <div className="relative py-2">
               <div className="absolute inset-0 flex items-center">
@@ -3391,11 +3565,11 @@ export default function Home() {
               <h4 className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-3">Incidents</h4>
               
               {/* Incidents at Hospital */}
-              {incidentsAtHospital.length > 0 && (
+              {incidents.filter(inc => inc.resolved).length > 0 && (
                 <div className="mb-4">
                   <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">At Hospital</p>
                   <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {incidentsAtHospital.map((incident, idx) => (
+                    {incidents.filter(inc => inc.resolved).map((incident, idx) => (
                       <div key={incident.id} className="bg-white p-3 rounded-xl border border-rose-200">
                         <div className="flex items-start justify-between mb-1">
                           <span className="text-xs font-bold text-slate-800">Incident #{idx + 1}</span>
@@ -3406,24 +3580,40 @@ export default function Home() {
                         {incident.message && (
                           <div className="text-xs text-slate-600 mb-1 italic">"{incident.message}"</div>
                         )}
+                        {incident.liveInformation && (
+                          <div className="bg-slate-50 border border-rose-300 rounded-lg p-2 mt-2 mb-2">
+                            <div className="text-[10px] font-bold text-rose-700 uppercase tracking-wider mb-1">Live Information</div>
+                            <div className="text-xs text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                          </div>
+                        )}
                         <div className="text-[10px] text-slate-500 font-mono mb-1">
                           {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
                         </div>
-                        <div className="text-[10px] text-blue-600 font-medium">
-                          Brought by: {incident.ambulanceName || `Vehicle ${incident.ambulanceId.slice(0, 8)}`}
-                        </div>
+                        {incident.ambulanceName && (
+                          <div className="text-[10px] text-blue-600 font-medium">
+                            Brought by: {incident.ambulanceName}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Active Incidents (with returning ambulances) */}
-              {incidents.filter(inc => !inc.resolved).length > 0 && (
+              {/* Active Incidents (excluding returning ambulances) */}
+              {incidents.filter(inc => {
+                if (inc.resolved) return false;
+                const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                return assignment?.phase !== 'returning';
+              }).length > 0 && (
                 <div>
                   <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Active</p>
                   <div className="space-y-2 max-h-40 overflow-y-auto">
-                    {incidents.filter(inc => !inc.resolved).map((incident, idx) => {
+                    {incidents.filter(inc => {
+                      if (inc.resolved) return false;
+                      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                      return assignment?.phase !== 'returning';
+                    }).map((incident, idx) => {
                       // Find returning ambulance for this incident
                       const returningAssignment = Array.from(ambulanceIncidentAssignments.entries()).find(
                         ([_, assignment]) => assignment.incidentId === incident.id && assignment.phase === 'returning'
@@ -3474,7 +3664,11 @@ export default function Home() {
                 </div>
               )}
 
-              {incidentsAtHospital.length === 0 && incidents.filter(inc => !inc.resolved).length === 0 && (
+              {incidents.filter(inc => inc.resolved).length === 0 && incidents.filter(inc => {
+                if (inc.resolved) return false;
+                const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                return assignment?.phase !== 'returning';
+              }).length === 0 && (
                 <div className="text-center py-4 text-xs text-slate-400">
                   No incidents recorded
                 </div>

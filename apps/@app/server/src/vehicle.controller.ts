@@ -6,6 +6,7 @@ interface ShareLocationDto {
   lng: number;
   vehicleId?: string;
   message?: string;
+  liveInformation?: string;
 }
 
 @Controller('api')
@@ -16,15 +17,15 @@ export class VehicleController {
   @Post('share-location')
   async shareLocation(@Body() dto: ShareLocationDto) {
     const vehicleId = dto.vehicleId || 'SHARED-1';
-    const { lat, lng, message } = dto;
+    const { lat, lng, message, liveInformation } = dto;
 
     // 验证坐标范围
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return { success: false, message: 'Invalid coordinates' };
     }
 
-    // 通过 WebSocket 发送位置更新（包含笔记消息）
-    this.telemetryGateway.emitSharedLocation(vehicleId, lat, lng, message);
+    // 通过 WebSocket 发送位置更新（包含笔记消息和liveInformation）
+    this.telemetryGateway.emitSharedLocation(vehicleId, lat, lng, message, liveInformation);
 
     return {
       success: true,
@@ -33,6 +34,7 @@ export class VehicleController {
       lat,
       lng,
       note: message,
+      liveInformation,
     };
   }
 

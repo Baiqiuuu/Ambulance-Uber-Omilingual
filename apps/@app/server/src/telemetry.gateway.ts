@@ -23,7 +23,7 @@ export class TelemetryGateway implements OnGatewayInit {
   private vehiclePositions = new Map<string, { lat: number; lng: number }>();
   
   // 存储分享的位置和笔记
-  private sharedLocations = new Map<string, { lat: number; lng: number; message?: string }>();
+  private sharedLocations = new Map<string, { lat: number; lng: number; message?: string; liveInformation?: string }>();
 
   // 锁定状态：是否锁定车辆位置
   private isPositionLocked = false;
@@ -103,25 +103,70 @@ export class TelemetryGateway implements OnGatewayInit {
   }
 
   // 发送分享的位置（包含笔记消息）
-  emitSharedLocation(vehicleId: string, lat: number, lng: number, message?: string) {
-    // 保存分享的位置和笔记
-    this.sharedLocations.set(vehicleId, { lat, lng, message });
+  emitSharedLocation(vehicleId: string, lat: number, lng: number, message?: string, liveInformation?: string) {
+    // 获取现有位置数据以保留原始message
+    const existing = this.sharedLocations.get(vehicleId);
     
-    // 发送分享位置事件
-    this.server.emit('location:shared', {
+    // 保存分享的位置和笔记，保留原始message如果只更新liveInformation
+    const updatedData: { lat: number; lng: number; message?: string; liveInformation?: string } = { 
+      lat, 
+      lng,
+    };
+    
+    // Only update message if explicitly provided
+    if (message !== undefined) {
+      updatedData.message = message;
+    } else if (existing?.message) {
+      updatedData.message = existing.message; // Preserve existing message
+    }
+    
+    // Only update liveInformation if explicitly provided
+    if (liveInformation !== undefined) {
+      updatedData.liveInformation = liveInformation;
+    } else if (existing?.liveInformation) {
+      updatedData.liveInformation = existing.liveInformation; // Preserve existing liveInformation
+    }
+    
+    this.sharedLocations.set(vehicleId, updatedData);
+    
+    // 发送分享位置事件 - only include fields that exist
+    const emitData: any = {
       id: vehicleId,
       lat,
       lng,
-      message,
-    });
+    };
+    
+    // Only include message if it exists (don't send undefined)
+    if (updatedData.message !== undefined) {
+      emitData.message = updatedData.message;
+    }
+    
+    // Only include liveInformation if it exists (don't send undefined)
+    if (updatedData.liveInformation !== undefined) {
+      emitData.liveInformation = updatedData.liveInformation;
+    }
+    
+    this.server.emit('location:shared', emitData);
   }
 
   // 获取所有分享的位置
   getSharedLocations() {
-    return Array.from(this.sharedLocations.entries()).map(([id, data]) => ({
-      id,
-      ...data,
-    }));
+    const locations = Array.from(this.sharedLocations.entries()).map(([id, data]) => {
+      const location: any = {
+        id,
+        lat: data.lat,
+        lng: data.lng,
+      };
+      if (data.message !== undefined) {
+        location.message = data.message;
+      }
+      if (data.liveInformation !== undefined) {
+        location.liveInformation = data.liveInformation;
+      }
+      return location;
+    });
+    console.log('getSharedLocations returning:', locations, 'Total incidents:', locations.length);
+    return locations;
   }
 
   // 锁定车辆位置（使用当前位置）
