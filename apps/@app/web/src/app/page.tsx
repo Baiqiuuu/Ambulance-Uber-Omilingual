@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import MapGL, { Marker, MapLayerMouseEvent, Source, Layer } from 'react-map-gl';
 import type { MapRef } from 'react-map-gl';
 import type { Map as MapboxMap, CustomLayerInterface } from 'mapbox-gl';
@@ -20,7 +20,19 @@ type NearestLocation = {
 };
 type Vehicle = { id: string; lat: number; lng: number; status?: string; name?: string };
 type Coordinate = { id: string; lat: number; lng: number };
-type SharedLocation = { id: string; lat: number; lng: number; message?: string };
+type Incident = { 
+  id: string; 
+  lat: number; 
+  lng: number; 
+  message?: string; 
+  timestamp?: number; 
+  assignedAmbulanceId?: string; 
+  resolved?: boolean; 
+  liveInformation?: string;
+  ambulanceName?: string;
+  arrivedAt?: number;
+};
+type Hospital = { lat: number; lng: number; icon: string };
 type MedicalVehicle = {
   id: string;
   name?: string;
@@ -71,7 +83,15 @@ export default function Home() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [medicalVehicles, setMedicalVehicles] = useState<MedicalVehicle[]>([]);
   const [coordinates, setCoordinates] = useState<Coordinate[]>([]);
-  const [sharedLocation, setSharedLocation] = useState<SharedLocation | null>(null);
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+  const [hospital, setHospital] = useState<Hospital>({ lat: 39.95025, lng: -75.19532, icon: 'hospital' });
+  const [ambulanceIncidentAssignments, setAmbulanceIncidentAssignments] = useState<Map<string, { 
+    incidentId: string; 
+    phase: 'going' | 'waiting' | 'returning'; 
+    waitStartTime?: number;
+    incidentData?: { lat: number; lng: number; message?: string; timestamp?: number; liveInformation?: string };
+  }>>(new Map());
+  // Removed incidentsAtHospital - all incidents are now in the incidents array
   const [aeds, setAeds] = useState<AED[]>([]);
   const [showAEDs, setShowAEDs] = useState(true);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -90,21 +110,47 @@ export default function Home() {
   const [selectedVehicle, setSelectedVehicle] = useState<MedicalVehicle | null>(null);
   const [trackingInterval, setTrackingInterval] = useState<NodeJS.Timeout | null>(null);
   const [mapStyle, setMapStyle] = useState<MapStyle>('street');
-  const [showSharePanel, setShowSharePanel] = useState(false);
+  const [showIncidentPanel, setShowIncidentPanel] = useState(false);
+  const [showIncidentsPopup, setShowIncidentsPopup] = useState(false);
   const [showAddCoordinatePanel, setShowAddCoordinatePanel] = useState(false);
-  const [shareLat, setShareLat] = useState('');
-  const [shareLng, setShareLng] = useState('');
-  const [shareMessage, setShareMessage] = useState('');
+  const [incidentLat, setIncidentLat] = useState('');
+  const [incidentLng, setIncidentLng] = useState('');
+  const [pickingIncidentLocation, setPickingIncidentLocation] = useState(false);
+  const [incidentMessage, setIncidentMessage] = useState('');
   const [newCoordLat, setNewCoordLat] = useState('');
   const [newCoordLng, setNewCoordLng] = useState('');
   const [modelReady, setModelReady] = useState(false);
   const [isPositionLocked, setIsPositionLocked] = useState(false);
+  const [isEarthView, setIsEarthView] = useState(false);
+  const [routeData, setRouteData] = useState<Map<string, {
+    type: 'FeatureCollection';
+    features: Array<{
+      type: 'Feature';
+      properties: { distance: number; duration: number };
+      geometry: any;
+    }>;
+  }>>(new Map());
+  const routeDataRef = useRef<Map<string, {
+    type: 'FeatureCollection';
+    features: Array<{
+      type: 'Feature';
+      properties: { distance: number; duration: number };
+      geometry: any;
+    }>;
+  }>>(new Map());
+  // Track route progress for each vehicle (0 to 1)
+  const routeProgressRef = useRef<Map<string, number>>(new Map());
+  // Track route distances for each vehicle (for accurate splitting)
+  const routeDistancesCacheRef = useRef<Map<string, number[]>>(new Map());
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
 
   // New states for renaming and map picking
   const [registerName, setRegisterName] = useState('');
   const [isPickingLocation, setIsPickingLocation] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [editingLocationVehicleId, setEditingLocationVehicleId] = useState<string | null>(null);
 
   // Language detection states
   const [showLanguagePanel, setShowLanguagePanel] = useState(false);
@@ -147,6 +193,26 @@ export default function Home() {
   // Ref for A1 movement step state
   const a1StepRef = useRef(0);
 
+  // Smooth animation state for vehicles
+  const [animatedVehicles, setAnimatedVehicles] = useState<Map<string, { lat: number; lng: number }>>(new Map());
+  const animatedVehiclesRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
+  const animationFrameRef = useRef<number | null>(null);
+  const vehicleAnimationsRef = useRef<Map<string, {
+    startLat: number;
+    startLng: number;
+    endLat: number;
+    endLng: number;
+    startTime: number;
+    duration: number;
+    routePath?: Array<[number, number]>; // [lng, lat] coordinates from route
+    routeDistances?: number[]; // Cumulative distances along route for constant speed
+  }>>(new Map());
+  
+  // Vehicle destinations (where they're going to)
+  const [vehicleDestinations, setVehicleDestinations] = useState<Map<string, { lat: number; lng: number; duration?: number }>>(new Map());
+  const vehicleDestinationsRef = useRef<Map<string, { lat: number; lng: number; duration?: number }>>(new Map());
+  const calculatedRoutesRef = useRef<Map<string, { start: { lat: number; lng: number }; end: { lat: number; lng: number } }>>(new Map());
+
   // Find A1 ID to trigger effect only when A1 is created/deleted
   const a1Id = useMemo(() => vehicles.find(v => v.name === 'A1')?.id, [vehicles]);
 
@@ -154,41 +220,22 @@ export default function Home() {
   useEffect(() => {
     if (!a1Id) return;
 
-    console.log('🚑 Starting A1 square movement pattern (5s interval)...');
+    console.log('🚑 Starting A1 movement pattern (15s interval)...');
 
-    // Philadelphia City Hall Center
-    const centerLat = 39.9526;
-    const centerLng = -75.1652;
-    const offset = 0.005; // Square size
+    // Exact coordinates for A1 to visit
+    const positions = [
+      { lat: 39.94524, lng: -75.17175},
+      { lat: 39.95705, lng: -75.16918 },
+      { lat: 39.95559, lng: -75.15748 },
+      { lat: 39.94633, lng: -75.15950 },
+      { lat: 39.94783, lng: -75.17120 },
+    ];
 
     const interval = setInterval(async () => {
       const step = a1StepRef.current;
-      let newLat = centerLat;
-      let newLng = centerLng;
-
-      // Square pattern: TL -> TR -> BR -> BL
-      switch (step % 4) {
-        case 0: // Top Left
-          newLat += offset;
-          newLng -= offset;
-          break;
-        case 1: // Top Right
-          newLat += offset;
-          newLng += offset;
-          break;
-        case 2: // Bottom Right
-          newLat -= offset;
-          newLng += offset;
-          break;
-        case 3: // Bottom Left
-          newLat -= offset;
-          newLng -= offset;
-          break;
-      }
-
-      // Add randomness (jitter)
-      newLat += (Math.random() - 0.5) * 0.002;
-      newLng += (Math.random() - 0.5) * 0.002;
+      const position = positions[step % positions.length];
+      const newLat = position.lat;
+      const newLng = position.lng;
 
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
@@ -205,7 +252,7 @@ export default function Home() {
       }
 
       a1StepRef.current++;
-    }, 5000);
+    }, 15000);
 
     return () => {
       console.log('🚑 Stopping A1 movement.');
@@ -247,20 +294,330 @@ export default function Home() {
         m.set(v.id, v);
         const newVehicles = Array.from(m.values());
         vehiclesRef.current = newVehicles; // Update ref with latest vehicles
+        
+        // Start smooth animation for position changes
+        if (existing && (Math.abs(existing.lat - v.lat) > 0.000001 || Math.abs(existing.lng - v.lng) > 0.000001)) {
+          const currentAnimated = animatedVehiclesRef.current.get(v.id);
+          const startLat = currentAnimated?.lat ?? existing.lat;
+          const startLng = currentAnimated?.lng ?? existing.lng;
+          
+          // Set destination (where vehicle is going to)
+          const newDestination = { lat: v.lat, lng: v.lng };
+          const oldDestination = vehicleDestinationsRef.current.get(v.id);
+          
+          // Only update if destination actually changed
+          const destinationChanged = !oldDestination || 
+            Math.abs(oldDestination.lat - newDestination.lat) > 0.000001 ||
+            Math.abs(oldDestination.lng - newDestination.lng) > 0.000001;
+          
+          if (destinationChanged) {
+            setVehicleDestinations(prev => {
+              const newMap = new Map(prev);
+              // Preserve existing duration if destination coordinates are close (for returning to hospital)
+              const existingDestination = prev.get(v.id);
+              if (existingDestination?.duration) {
+                // If existing destination has a duration, preserve it if coordinates are close
+                const coordsMatch = Math.abs(existingDestination.lat - newDestination.lat) < 0.0001 &&
+                                    Math.abs(existingDestination.lng - newDestination.lng) < 0.0001;
+                if (coordsMatch) {
+                  // Coordinates match, preserve duration
+                  newMap.set(v.id, { ...newDestination, duration: existingDestination.duration });
+                  vehicleDestinationsRef.current = newMap;
+                  calculatedRoutesRef.current.delete(v.id);
+                  return newMap;
+                }
+              }
+              // No existing duration or coordinates don't match, use new destination
+              newMap.set(v.id, newDestination);
+              vehicleDestinationsRef.current = newMap;
+              // Clear calculated route for this vehicle so it gets recalculated
+              calculatedRoutesRef.current.delete(v.id);
+              return newMap;
+            });
+          }
+          
+          // Check if we have a route for this vehicle and use its path
+          // Try to get route from ref (most up-to-date)
+          const route = routeDataRef.current.get(v.id);
+          let routePath: Array<[number, number]> | undefined;
+          
+          if (route && route.features.length > 0) {
+            const geometry = route.features[0].geometry;
+            if (geometry.type === 'LineString' && geometry.coordinates && Array.isArray(geometry.coordinates)) {
+              routePath = geometry.coordinates as Array<[number, number]>;
+            }
+          }
+          
+          // Create animation object
+          const destination = vehicleDestinationsRef.current.get(v.id);
+          const animObj = {
+            startLat,
+            startLng,
+            endLat: v.lat,
+            endLng: v.lng,
+            startTime: performance.now(),
+            duration: destination?.duration ?? 14000, // Use destination duration if set, otherwise default to 14s
+            routePath: routePath,
+          };
+          
+          vehicleAnimationsRef.current.set(v.id, animObj);
+          
+          // If route wasn't available but might be calculated soon, 
+          // the route calculation will update this animation when it completes
+          
+          // Ensure animation loop is running
+          if (animationFrameRef.current === null) {
+            const animate = () => {
+              const now = performance.now();
+              const newAnimatedVehicles = new Map(animatedVehiclesRef.current);
+
+              vehicleAnimationsRef.current.forEach((anim, vehicleId) => {
+                const elapsed = now - anim.startTime;
+                const progress = Math.min(elapsed / anim.duration, 1);
+                
+                // Use easing function for smooth acceleration/deceleration
+                const easeInOutCubic = progress < 0.5
+                  ? 4 * progress * progress * progress
+                  : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+                if (progress < 1) {
+                  // Still animating
+                  let currentLat: number;
+                  let currentLng: number;
+
+                  // Try to get route path from animation, or check if route was calculated after animation started
+                  let routePath = anim.routePath;
+                  
+                  // If no route path in animation, try to get it from route data (route might have been calculated after animation started)
+                  if (!routePath || routePath.length === 0) {
+                    const route = routeDataRef.current.get(vehicleId);
+                    if (route && route.features.length > 0) {
+                      const geometry = route.features[0].geometry;
+                      if (geometry.type === 'LineString' && geometry.coordinates && Array.isArray(geometry.coordinates)) {
+                        routePath = geometry.coordinates as Array<[number, number]>;
+                        // Update animation with route path for next frame
+                        vehicleAnimationsRef.current.set(vehicleId, {
+                          ...anim,
+                          routePath: routePath,
+                        });
+                      }
+                    }
+                  }
+                  
+                  if (routePath && routePath.length > 0) {
+                    // Follow route path with constant speed using distance-based interpolation
+                    let routeDistances = anim.routeDistances;
+                    
+                    // Calculate cumulative distances if not already calculated
+                    if (!routeDistances || routeDistances.length !== routePath.length) {
+                      routeDistances = [0]; // Start at distance 0
+                      for (let i = 1; i < routePath.length; i++) {
+                        const prev = routePath[i - 1];
+                        const curr = routePath[i];
+                        if (prev && curr && Array.isArray(prev) && Array.isArray(curr)) {
+                          // Calculate distance between consecutive points (Haversine approximation)
+                          const dLat = curr[1] - prev[1];
+                          const dLng = curr[0] - prev[0];
+                          const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+                          routeDistances.push(routeDistances[i - 1] + distance);
+                        } else {
+                          routeDistances.push(routeDistances[i - 1]);
+                        }
+                      }
+                      // Store calculated distances in animation and cache
+                      vehicleAnimationsRef.current.set(vehicleId, {
+                        ...anim,
+                        routeDistances: routeDistances,
+                      });
+                      routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+                    } else if (routeDistances && routeDistances.length === routePath.length) {
+                      // Update cache if distances exist but aren't cached
+                      routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+                    }
+                    
+                    // Use eased progress to determine position along route based on distance
+                    const easedProgress = easeInOutCubic;
+                    const totalDistance = routeDistances[routeDistances.length - 1];
+                    const targetDistance = easedProgress * totalDistance;
+                    
+                    // Store progress for route visualization (using distance-based progress)
+                    routeProgressRef.current.set(vehicleId, easedProgress);
+                    
+                    // Find the segment that contains the target distance
+                    let segmentIndex = 0;
+                    for (let i = 0; i < routeDistances.length - 1; i++) {
+                      if (targetDistance >= routeDistances[i] && targetDistance <= routeDistances[i + 1]) {
+                        segmentIndex = i;
+                        break;
+                      }
+                      if (targetDistance > routeDistances[i]) {
+                        segmentIndex = i;
+                      }
+                    }
+                    segmentIndex = Math.min(segmentIndex, routePath.length - 2);
+                    
+                    const segmentStart = routeDistances[segmentIndex];
+                    const segmentEnd = routeDistances[segmentIndex + 1];
+                    const segmentLength = segmentEnd - segmentStart;
+                    const segmentProgress = segmentLength > 0 
+                      ? (targetDistance - segmentStart) / segmentLength 
+                      : 0;
+                    
+                    const currentPoint = routePath[segmentIndex];
+                    const nextPoint = routePath[segmentIndex + 1];
+                    
+                    if (currentPoint && nextPoint && Array.isArray(currentPoint) && Array.isArray(nextPoint)) {
+                      // Smooth interpolation between current and next point in route
+                      // Route coordinates are [lng, lat]
+                      currentLng = currentPoint[0] + (nextPoint[0] - currentPoint[0]) * segmentProgress;
+                      currentLat = currentPoint[1] + (nextPoint[1] - currentPoint[1]) * segmentProgress;
+                    } else {
+                      // Fallback if route path is malformed
+                      currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
+                      currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                    }
+                  } else {
+                    // Fallback to straight line if no route path available
+                    currentLat = anim.startLat + (anim.endLat - anim.startLat) * easeInOutCubic;
+                    currentLng = anim.startLng + (anim.endLng - anim.startLng) * easeInOutCubic;
+                    // Still update progress for visualization (even without route, progress is still valid)
+                    routeProgressRef.current.set(vehicleId, easeInOutCubic);
+                  }
+                  
+                  newAnimatedVehicles.set(vehicleId, { lat: currentLat, lng: currentLng });
+                } else {
+                  // Animation complete
+                  newAnimatedVehicles.set(vehicleId, { lat: anim.endLat, lng: anim.endLng });
+                  vehicleAnimationsRef.current.delete(vehicleId);
+                  // Set progress to 1 (fully traveled)
+                  routeProgressRef.current.set(vehicleId, 1);
+                }
+              });
+
+              animatedVehiclesRef.current = newAnimatedVehicles;
+              setAnimatedVehicles(newAnimatedVehicles);
+
+              // Continue animation loop if there are active animations
+              if (vehicleAnimationsRef.current.size > 0) {
+                animationFrameRef.current = requestAnimationFrame(animate);
+              } else {
+                animationFrameRef.current = null;
+              }
+            };
+            animationFrameRef.current = requestAnimationFrame(animate);
+          }
+        } else {
+          // No position change, just update immediately
+          animatedVehiclesRef.current.set(v.id, { lat: v.lat, lng: v.lng });
+          setAnimatedVehicles(new Map(animatedVehiclesRef.current));
+        }
+        
         console.log('Current vehicle list:', newVehicles);
         return newVehicles;
       });
     });
 
-    socket.on('location:shared', (data: SharedLocation) => {
-      console.log('Received shared location:', data);
-      setSharedLocation(data);
+    socket.on('location:shared', (data: Incident) => {
+      console.log('Received incident:', data);
+      setIncidents(prev => {
+        // Check if incident already exists (by id, or by coordinates within 3 seconds - message doesn't matter for matching)
+        const existing = prev.find(inc => {
+          // Exact ID match
+          if (inc.id === data.id) return true;
+          
+          // Same coordinates within 3 seconds (message is merged, not required for matching)
+          const sameLocation = Math.abs(inc.lat - data.lat) < 0.0001 && Math.abs(inc.lng - data.lng) < 0.0001;
+          const recentTimestamp = inc.timestamp && data.timestamp && Math.abs(inc.timestamp - data.timestamp) < 3000;
+          
+          return sameLocation && recentTimestamp;
+        });
+        
+        if (existing) {
+          // Update existing incident (merge data, prefer non-empty values)
+          return prev.map(inc => {
+            const isMatch = inc.id === data.id || 
+              (Math.abs(inc.lat - data.lat) < 0.0001 && 
+               Math.abs(inc.lng - data.lng) < 0.0001 && 
+               inc.timestamp && data.timestamp && 
+               Math.abs(inc.timestamp - data.timestamp) < 3000);
+            
+            if (isMatch) {
+              // Merge: preserve original message, update liveInformation separately
+              // Only include fields that are explicitly provided (not undefined)
+              const updates: Partial<Incident> = {
+                id: data.id || inc.id,
+                lat: data.lat,
+                lng: data.lng,
+                timestamp: data.timestamp || inc.timestamp || Date.now(),
+              };
+              
+              // Only update message if it's explicitly provided and not undefined
+              if (data.message !== undefined) {
+                updates.message = data.message;
+              } else {
+                updates.message = inc.message; // Preserve original
+              }
+              
+              // Update liveInformation if provided
+              if (data.liveInformation !== undefined) {
+                updates.liveInformation = data.liveInformation;
+              } else {
+                updates.liveInformation = inc.liveInformation; // Preserve existing
+              }
+              
+              // Preserve other fields
+              if (data.assignedAmbulanceId !== undefined) {
+                updates.assignedAmbulanceId = data.assignedAmbulanceId;
+              } else {
+                updates.assignedAmbulanceId = inc.assignedAmbulanceId;
+              }
+              
+              if (data.resolved !== undefined) {
+                updates.resolved = data.resolved;
+              } else {
+                updates.resolved = inc.resolved;
+              }
+              
+              return {
+                ...inc,
+                ...updates,
+              };
+            }
+            return inc;
+          });
+        } else {
+          // Add new incident only if it has valid data
+          if (data.id && data.lat && data.lng) {
+            return [...prev, { ...data, timestamp: data.timestamp || Date.now() }];
+          }
+          return prev;
+        }
+      });
     });
 
     return () => {
       socket.close();
     };
   }, [viewMode]);
+
+  // Initialize animated positions and destinations for vehicles when they first appear
+  useEffect(() => {
+    vehicles.forEach(v => {
+      if (!animatedVehiclesRef.current.has(v.id)) {
+        animatedVehiclesRef.current.set(v.id, { lat: v.lat, lng: v.lng });
+      }
+      // Set initial destination to current position
+      setVehicleDestinations(prev => {
+        const newMap = new Map(prev);
+        if (!newMap.has(v.id)) {
+          newMap.set(v.id, { lat: v.lat, lng: v.lng });
+        }
+        vehicleDestinationsRef.current = newMap; // Update ref
+        return newMap;
+      });
+    });
+    setAnimatedVehicles(new Map(animatedVehiclesRef.current));
+  }, [vehicles.length]); // Initialize when vehicle count changes
 
   // Fetch medical vehicles when in medical mode
   useEffect(() => {
@@ -344,10 +701,12 @@ export default function Home() {
     }
   }, [mapLoaded]);
 
-  // Share location to server
-  const shareLocation = useCallback(async (lat: number, lng: number, message?: string, vehicleId = 'SHARED-1') => {
+  // Report incident to server
+  const reportIncident = useCallback(async (lat: number, lng: number, message?: string, vehicleId?: string) => {
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      // Generate unique ID with timestamp and random component to avoid collisions
+      const incidentId = vehicleId || `INCIDENT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const response = await fetch(`${apiBase}/api/share-location`, {
         method: 'POST',
         headers: {
@@ -356,21 +715,23 @@ export default function Home() {
         body: JSON.stringify({
           lat,
           lng,
-          vehicleId,
-          message,
+          vehicleId: incidentId,
+          message: message || undefined, // Ensure message is undefined if empty, not empty string
         }),
       });
 
       const result = await response.json();
       if (result.success) {
-        console.log('Location shared successfully:', result);
+        console.log('Incident reported successfully:', result);
+        // Don't add locally - let WebSocket handler add it to avoid duplicates
+        // The server will broadcast it via WebSocket and the socket handler will add it
       }
     } catch (error) {
-      console.error('Failed to share location:', error);
+      console.error('Failed to report incident:', error);
     }
   }, []);
 
-  // Read location from URL parameters (for mobile sharing)
+  // Read location from URL parameters (for mobile incident reporting)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -382,23 +743,23 @@ export default function Home() {
         const latNum = parseFloat(lat);
         const lngNum = parseFloat(lng);
         if (!isNaN(latNum) && !isNaN(lngNum)) {
-          shareLocation(latNum, lngNum, message || undefined);
+          reportIncident(latNum, lngNum, message || undefined);
           // Clear URL parameters
           window.history.replaceState({}, '', window.location.pathname);
         }
       }
     }
-  }, [shareLocation]);
+  }, [reportIncident]);
 
-  // Get current location
+  // Get current location for incident (just fills the form, doesn't create incident)
   const getCurrentLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const { latitude, longitude } = position.coords;
-          setShareLat(latitude.toFixed(6));
-          setShareLng(longitude.toFixed(6));
-          shareLocation(latitude, longitude, shareMessage || undefined);
+          setIncidentLat(latitude.toFixed(6));
+          setIncidentLng(longitude.toFixed(6));
+          // Don't automatically create incident - just fill the form fields
         },
         (error) => {
           console.error('Failed to get location:', error);
@@ -410,10 +771,10 @@ export default function Home() {
     }
   };
 
-  // Manual share location
-  const handleManualShare = () => {
-    const lat = parseFloat(shareLat);
-    const lng = parseFloat(shareLng);
+  // Manual incident report
+  const handleManualIncidentReport = () => {
+    const lat = parseFloat(incidentLat);
+    const lng = parseFloat(incidentLng);
 
     if (isNaN(lat) || isNaN(lng)) {
       alert('Please enter valid coordinates');
@@ -425,11 +786,11 @@ export default function Home() {
       return;
     }
 
-    shareLocation(lat, lng, shareMessage || undefined);
-    setShowSharePanel(false);
-    setShareLat('');
-    setShareLng('');
-    setShareMessage('');
+    reportIncident(lat, lng, incidentMessage || undefined);
+    setShowIncidentPanel(false);
+    setIncidentLat('');
+    setIncidentLng('');
+    setIncidentMessage('');
   };
 
   // Add new coordinate
@@ -688,7 +1049,7 @@ export default function Home() {
     };
 
     const demoVehicles = [
-      { name: 'A1', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
+      { name: 'A1', lat: hospital.lat, lng: hospital.lng, status: 'on_duty' }, // A1 starts at hospital and is busy
       { name: 'A2', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
       { name: 'A3', lat: getRandomCoord(centerLat, radius), lng: getRandomCoord(centerLng, radius), status: 'vacant' },
     ];
@@ -729,7 +1090,212 @@ export default function Home() {
     if (vehiclesResult.success) {
       setMedicalVehicles(vehiclesResult.vehicles || []);
     }
-  }, [medicalVehicles]);
+  }, [medicalVehicles, hospital]);
+
+  // Calculate ETA for returning ambulance (distance-based time estimate)
+  const calculateETA = useCallback((ambulanceId: string, assignment: { incidentId: string; phase: 'going' | 'waiting' | 'returning' }) => {
+    const ambulance = vehicles.find(v => v.id === ambulanceId);
+    if (!ambulance || assignment.phase !== 'returning') return null;
+    
+    const animatedPos = animatedVehicles.get(ambulanceId);
+    const currentLat = animatedPos?.lat ?? ambulance.lat;
+    const currentLng = animatedPos?.lng ?? ambulance.lng;
+    
+    if (!currentLat || !currentLng) return null;
+    
+    // Get distance in meters (function returns meters despite name)
+    const distanceMeters = getDistanceFromLatLonInKm(hospital.lat, hospital.lng, currentLat, currentLng);
+    // Convert to kilometers
+    const distanceKm = distanceMeters / 1000;
+    
+    // General time relationship: average ambulance speed in urban areas is ~50 km/h
+    // Time (minutes) = Distance (km) / Speed (km/h) * 60
+    // Using 50 km/h as a reasonable average for city driving
+    const averageSpeedKmh = 50;
+    const etaMinutes = Math.ceil((distanceKm / averageSpeedKmh) * 60);
+    
+    return etaMinutes;
+  }, [vehicles, animatedVehicles, hospital]);
+
+  // Assign ambulance to closest incident
+  const assignAmbulanceToIncident = useCallback(async (ambulanceId: string, incidentId: string) => {
+    const incident = incidents.find(inc => inc.id === incidentId);
+    const ambulance = vehicles.find(v => v.id === ambulanceId);
+    
+    if (!incident || !ambulance) return;
+    
+    // Check if ambulance is already assigned to another incident
+    const existingAssignment = ambulanceIncidentAssignments.get(ambulanceId);
+    if (existingAssignment) {
+      alert(`Ambulance ${ambulance.name || ambulanceId} is already assigned to an incident. One ambulance can only handle one incident at a time.`);
+      return;
+    }
+    
+    try {
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+      
+      // Update incident to mark as assigned
+      setIncidents(prev => prev.map(inc => 
+        inc.id === incidentId ? { ...inc, assignedAmbulanceId: ambulanceId } : inc
+      ));
+      
+      // Set assignment phase to 'going' and store incident data
+      setAmbulanceIncidentAssignments(prev => {
+        const newMap = new Map(prev);
+        newMap.set(ambulanceId, { 
+          incidentId, 
+          phase: 'going',
+          incidentData: {
+            lat: incident.lat,
+            lng: incident.lng,
+            message: incident.message,
+            timestamp: incident.timestamp,
+            liveInformation: incident.liveInformation,
+          }
+        });
+        return newMap;
+      });
+      
+      // Set destination to incident with 1 minute duration
+      setVehicleDestinations(prev => {
+        const newMap = new Map(prev);
+        newMap.set(ambulanceId, { lat: incident.lat, lng: incident.lng, duration: 15000 });
+        vehicleDestinationsRef.current = newMap;
+        return newMap;
+      });
+      
+      // Send ambulance to incident location
+      const response = await fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/location`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          latitude: incident.lat,
+          longitude: incident.lng,
+        }),
+      });
+      
+      if (response.ok) {
+        // Update ambulance status to busy
+        await fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/status`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'on_duty' }),
+        });
+      }
+    } catch (error) {
+      console.error('Failed to assign ambulance to incident:', error);
+    }
+  }, [incidents, vehicles]);
+
+  // Handle ambulance dispatch logic (go to incident, wait, return to hospital)
+  useEffect(() => {
+    const checkAmbulanceAssignments = () => {
+      ambulanceIncidentAssignments.forEach((assignment, ambulanceId) => {
+        const ambulance = vehicles.find(v => v.id === ambulanceId);
+        const animatedPos = animatedVehicles.get(ambulanceId);
+        const currentLat = animatedPos?.lat ?? ambulance?.lat ?? 0;
+        const currentLng = animatedPos?.lng ?? ambulance?.lng ?? 0;
+        
+        if (!ambulance || !currentLat || !currentLng) return;
+        
+        if (assignment.phase === 'going') {
+          // For 'going' phase, we need the incident to still exist in the incidents array
+          const incident = incidents.find(inc => inc.id === assignment.incidentId);
+          if (!incident) return;
+          
+          // Check if ambulance has reached incident location
+          const distanceToIncident = Math.sqrt(
+            Math.pow(incident.lat - currentLat, 2) + 
+            Math.pow(incident.lng - currentLng, 2)
+          );
+          
+          if (distanceToIncident < 0.0001) { // ~10 meters
+            // Ambulance reached incident, keep it visible but mark as "at scene"
+            // Don't remove the incident - it should remain visible
+            setAmbulanceIncidentAssignments(prev => {
+              const newMap = new Map(prev);
+              newMap.set(ambulanceId, { ...assignment, phase: 'waiting', waitStartTime: Date.now() });
+              return newMap;
+            });
+          }
+        } else if (assignment.phase === 'waiting') {
+          // Check if 2 seconds have passed
+          const waitDuration = assignment.waitStartTime ? Date.now() - assignment.waitStartTime : 0;
+          if (waitDuration >= 1500) {
+            // Wait complete, send ambulance back to hospital
+            const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+            
+              // Set destination to hospital with duration BEFORE making API call
+              // This ensures duration is set before server sends telemetry update
+              const destinationWithDuration = { lat: hospital.lat, lng: hospital.lng, duration: 100000 };
+              setVehicleDestinations(prev => {
+                const newMap = new Map(prev);
+                newMap.set(ambulanceId, destinationWithDuration);
+                vehicleDestinationsRef.current = newMap;
+                return newMap;
+              });
+              
+            // Small delay to ensure state/ref is updated before API call triggers server update
+            setTimeout(() => {
+              fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/location`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  latitude: hospital.lat,
+                  longitude: hospital.lng,
+                }),
+              }).then(() => {
+                // Update assignment phase to returning (incident remains visible)
+                setAmbulanceIncidentAssignments(prev => {
+                  const newMap = new Map(prev);
+                  newMap.set(ambulanceId, { ...assignment, phase: 'returning' });
+                  return newMap;
+                });
+              });
+            }, 50);
+          }
+        } else if (assignment.phase === 'returning') {
+          // Check if ambulance has returned to hospital
+          const distanceToHospital = Math.sqrt(
+            Math.pow(hospital.lat - (currentLat || 0), 2) + 
+            Math.pow(hospital.lng - (currentLng || 0), 2)
+          );
+          
+          if (distanceToHospital < 0.0001) { // ~10 meters
+            // Ambulance returned, mark incident as resolved and store hospital info in the incident
+            setIncidents(prev => prev.map(inc => 
+              inc.id === assignment.incidentId 
+                ? { 
+                    ...inc, 
+                    resolved: true, 
+                    assignedAmbulanceId: undefined, // Clear assignment
+                    ambulanceName: ambulance.name, // Store ambulance name for reference
+                    arrivedAt: Date.now(), // Store arrival time
+                    // Preserve all existing data including liveInformation
+                  }
+                : inc
+            ));
+            
+            const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+            fetch(`${apiBase}/api/medical/vehicles/${ambulanceId}/status`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'vacant' }),
+            });
+            
+            setAmbulanceIncidentAssignments(prev => {
+              const newMap = new Map(prev);
+              newMap.delete(ambulanceId);
+              return newMap;
+            });
+          }
+        }
+      });
+    };
+    
+    const interval = setInterval(checkAmbulanceAssignments, 500); // Check every 500ms
+    return () => clearInterval(interval);
+  }, [ambulanceIncidentAssignments, vehicles, incidents, animatedVehicles, hospital]);
 
   // Generate share link
   const generateShareLink = (lat: number, lng: number, message?: string) => {
@@ -741,38 +1307,198 @@ export default function Home() {
     return `${baseUrl}?${params.toString()}`;
   };
 
-  // Generate paths from all vehicles and coordinates to shared location
+  // Generate paths from all vehicles' current animated positions to active incidents (user mode only)
   const generatePaths = useCallback(() => {
-    if (!sharedLocation) return null;
+    // Only show cyan lines in user mode
+    if (viewMode !== 'user') return null;
+    
+    // Filter to only active incidents (not resolved, not returning)
+    const activeIncidents = incidents.filter(inc => {
+      if (inc.resolved) return false;
+      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+      return assignment?.phase !== 'returning';
+    });
+    
+    if (activeIncidents.length === 0) return null;
+    if (vehicles.length === 0) return null;
 
-    const allPoints: Array<{ lat: number; lng: number }> = [
-      ...vehicles.map(v => ({ lat: v.lat, lng: v.lng })),
-      ...coordinates.map(c => ({ lat: c.lat, lng: c.lng })),
-    ];
+    // Draw lines from all vehicles to active incidents, using their animated positions
+    const paths: Array<{ type: 'Feature'; geometry: { type: 'LineString'; coordinates: Array<[number, number]> } }> = [];
+    
+    vehicles.forEach(vehicle => {
+      // Use animated position if available (so line follows vehicle as it moves), otherwise use actual position
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const vehicleLat = animatedPos?.lat ?? vehicle.lat;
+      const vehicleLng = animatedPos?.lng ?? vehicle.lng;
 
-    if (allPoints.length === 0) return null;
-
-    const paths = allPoints.map(point => ({
+      // Draw a line to each active incident
+      activeIncidents.forEach(incident => {
+        paths.push({
       type: 'Feature' as const,
       geometry: {
         type: 'LineString' as const,
         coordinates: [
-          [point.lng, point.lat],
-          [sharedLocation.lng, sharedLocation.lat],
+              [vehicleLng, vehicleLat],
+              [incident.lng, incident.lat],
         ],
       },
-    }));
+        });
+      });
+    });
 
     return {
       type: 'FeatureCollection' as const,
       features: paths,
     };
-  }, [vehicles, coordinates, sharedLocation]);
+  }, [vehicles, incidents, animatedVehicles, viewMode, ambulanceIncidentAssignments]);
 
   const pathsData = generatePaths();
 
+  // Calculate route between two coordinates using Mapbox Directions API
+  const calculateRoute = useCallback(async (vehicleId: string, start: { lat: number; lng: number }, end: { lat: number; lng: number }) => {
+    const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (!mapboxToken) {
+      setRouteError('Mapbox token not configured');
+      return;
+    }
+
+    setRouteLoading(true);
+    setRouteError(null);
+
+    try {
+      // Mapbox Directions API expects coordinates as [lng, lat]
+      const coordinates = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+      const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?geometries=geojson&access_token=${mapboxToken}`;
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`Route calculation failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+        const route = data.routes[0];
+        const routeFeature = {
+          type: 'Feature' as const,
+          properties: {
+            distance: route.distance, // in meters
+            duration: route.duration, // in seconds
+          },
+          geometry: route.geometry,
+        };
+
+        setRouteData(prev => {
+          const newMap = new Map(prev);
+          newMap.set(vehicleId, {
+            type: 'FeatureCollection' as const,
+            features: [routeFeature],
+          });
+          routeDataRef.current = newMap; // Update ref
+          return newMap;
+        });
+        
+        // Reset progress for new route and clear cached distances
+        routeProgressRef.current.set(vehicleId, 0);
+        routeDistancesCacheRef.current.delete(vehicleId);
+
+        // Update animation to use route path if animation is active or will be active
+        // This ensures animation always has the route path, even if it started before route was calculated
+        if (route.geometry.type === 'LineString' && route.geometry.coordinates) {
+          // Extract coordinates from route geometry [lng, lat] format
+          const routePath = route.geometry.coordinates as Array<[number, number]>;
+          
+          // Update existing animation if it exists
+          const anim = vehicleAnimationsRef.current.get(vehicleId);
+          if (anim) {
+            vehicleAnimationsRef.current.set(vehicleId, {
+              ...anim,
+              routePath: routePath,
+            });
+          }
+          
+          // Also store route path for future animations
+          // This ensures that if animation hasn't started yet, it will have the route when it does
+        }
+      } else {
+        throw new Error('No route found');
+      }
+    } catch (error) {
+      console.error('Failed to calculate route:', error);
+      setRouteError(error instanceof Error ? error.message : 'Failed to calculate route');
+      setRouteData(prev => {
+        const newMap = new Map(prev);
+        newMap.delete(vehicleId);
+        routeDataRef.current = newMap; // Update ref
+        return newMap;
+      });
+    } finally {
+      setRouteLoading(false);
+    }
+  }, []);
+
+  // Auto-calculate routes from each vehicle's current position to its destination
+  useEffect(() => {
+    vehicles.forEach(vehicle => {
+      const destination = vehicleDestinations.get(vehicle.id);
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const currentLat = animatedPos?.lat ?? vehicle.lat;
+      const currentLng = animatedPos?.lng ?? vehicle.lng;
+
+      // Only calculate route if vehicle has a destination that's different from current position
+      if (destination) {
+        const distance = Math.sqrt(
+          Math.pow(destination.lat - currentLat, 2) + 
+          Math.pow(destination.lng - currentLng, 2)
+        );
+        
+        // Only calculate if destination is more than ~10 meters away
+        if (distance > 0.0001) {
+          // Check if we already calculated a route for this exact start/end pair
+          const calculatedRoute = calculatedRoutesRef.current.get(vehicle.id);
+          const routeKey = {
+            start: { lat: currentLat, lng: currentLng },
+            end: destination
+          };
+          
+          // Only calculate if:
+          // 1. No route was calculated yet, OR
+          // 2. The destination changed (checked by comparing end points)
+          const needsCalculation = !calculatedRoute || 
+            Math.abs(calculatedRoute.end.lat - destination.lat) > 0.000001 ||
+            Math.abs(calculatedRoute.end.lng - destination.lng) > 0.000001;
+          
+          if (needsCalculation) {
+            // Store that we're calculating this route
+            calculatedRoutesRef.current.set(vehicle.id, routeKey);
+            calculateRoute(vehicle.id, { lat: currentLat, lng: currentLng }, destination);
+          }
+        } else {
+          // Remove route if vehicle has reached destination
+          setRouteData(prev => {
+            const newMap = new Map(prev);
+            newMap.delete(vehicle.id);
+            routeDataRef.current = newMap; // Update ref
+            return newMap;
+          });
+          calculatedRoutesRef.current.delete(vehicle.id);
+        }
+      } else {
+        // Remove route if no destination
+        setRouteData(prev => {
+          const newMap = new Map(prev);
+          newMap.delete(vehicle.id);
+          routeDataRef.current = newMap; // Update ref
+          return newMap;
+        });
+        calculatedRoutesRef.current.delete(vehicle.id);
+      }
+    });
+  }, [vehicles, vehicleDestinations, calculateRoute]); // Removed animatedVehicles to prevent recalculation during animation
+
   // Calculate nearest OR tracked ambulance distance
   // If a vehicle is selected/tracked, we show that one. Otherwise nearest available.
+  // Uses animated position (current location) for all calculations
   const displayedAmbulance = useMemo(() => {
     if (!clickedCoord || vehicles.length === 0) return null;
 
@@ -780,8 +1506,13 @@ export default function Home() {
     if (selectedVehicle) {
       const tracked = vehicles.find(v => v.id === selectedVehicle.id);
       if (tracked) {
-        const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, tracked.lat, tracked.lng);
-        return { ...tracked, distance: dist, type: 'tracked' };
+        // Use animated position (current location) for distance calculation
+        const animatedPos = animatedVehicles.get(tracked.id);
+        const currentLat = animatedPos?.lat ?? tracked.lat;
+        const currentLng = animatedPos?.lng ?? tracked.lng;
+        const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
+        const destination = vehicleDestinations.get(tracked.id);
+        return { ...tracked, currentLat, currentLng, destination, distance: dist, type: 'tracked' };
       }
     }
 
@@ -792,15 +1523,20 @@ export default function Home() {
     let closest = null;
 
     availableVehicles.forEach(v => {
-      const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, v.lat, v.lng);
+      // Use animated position (current location) for distance calculation
+      const animatedPos = animatedVehicles.get(v.id);
+      const currentLat = animatedPos?.lat ?? v.lat;
+      const currentLng = animatedPos?.lng ?? v.lng;
+      const dist = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
       if (dist < minDist) {
         minDist = dist;
-        closest = { ...v, distance: dist, type: 'nearest' };
+        const destination = vehicleDestinations.get(v.id);
+        closest = { ...v, currentLat, currentLng, destination, distance: dist, type: 'nearest' };
       }
     });
 
     return closest;
-  }, [clickedCoord, vehicles, selectedVehicle]);
+  }, [clickedCoord, vehicles, selectedVehicle, animatedVehicles, vehicleDestinations]);
 
   // Add 3D buildings layer helper function
   const add3DBuildings = useCallback((map: MapboxMap) => {
@@ -870,6 +1606,88 @@ export default function Home() {
     return;
   }, [mapLoaded, mapStyle]); // Remove vehicles from dependencies to prevent layer recreation
 
+  // Add traffic layer helper function
+  const addTrafficLayer = useCallback((map: MapboxMap) => {
+    // Check if traffic layer already exists
+    if (map.getLayer('traffic-layer')) {
+      return;
+    }
+
+    try {
+      // Add traffic source if it doesn't exist
+      if (!map.getSource('mapbox-traffic')) {
+        map.addSource('mapbox-traffic', {
+          type: 'vector',
+          url: 'mapbox://mapbox.mapbox-traffic-v1',
+        });
+      }
+
+      // Find the first road layer to insert traffic after it
+      const layers = map.getStyle().layers;
+      let beforeLayerId: string | undefined;
+      
+      // Find a road layer to insert traffic after
+      for (const layer of layers) {
+        if (layer.type === 'line' && layer.id && (
+          layer.id.includes('road') || 
+          layer.id.includes('street') ||
+          layer.id.includes('highway') ||
+          layer.id.includes('bridge')
+        )) {
+          beforeLayerId = layer.id;
+          break;
+        }
+      }
+
+      // If no road layer found, insert before first label layer
+      if (!beforeLayerId) {
+        const labelLayer = layers.find(
+          (layer) => layer.type === 'symbol' && layer.layout && 'text-field' in (layer.layout as any)
+        );
+        beforeLayerId = labelLayer?.id;
+      }
+
+      // Add traffic layer
+      map.addLayer(
+        {
+          id: 'traffic-layer',
+          type: 'line',
+          source: 'mapbox-traffic',
+          'source-layer': 'traffic',
+          paint: {
+            'line-color': [
+              'case',
+              ['==', ['get', 'congestion'], 'low'],
+              '#00ff00', // Green for low traffic
+              ['==', ['get', 'congestion'], 'moderate'],
+              '#ffff00', // Yellow for moderate traffic
+              ['==', ['get', 'congestion'], 'heavy'],
+              '#ff8800', // Orange for heavy traffic
+              ['==', ['get', 'congestion'], 'severe'],
+              '#ff0000', // Red for severe traffic
+              '#888888' // Gray as default
+            ],
+            'line-width': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              10, 0.5,
+              13, 1,
+              16, 2,
+              20, 4
+            ],
+            'line-opacity': 0.6,
+          },
+        },
+        beforeLayerId
+      );
+      console.log('Traffic layer added successfully');
+    } catch (error) {
+      console.warn('Failed to add traffic layer:', error);
+      // Traffic may not be available in all regions or with all map styles
+    }
+  }, []);
+
   const handleMapLoad = useCallback(() => {
     setMapLoaded(true);
     // Ensure map uses mercator projection (required for custom layers)
@@ -884,20 +1702,62 @@ export default function Home() {
       } catch (e) {
         // Projection API might not be available in all versions
       }
-    }
-  }, []);
 
-  const handleMapClick = useCallback((event: MapLayerMouseEvent) => {
+      // Add traffic layer after map loads
+      if (map.isStyleLoaded()) {
+        addTrafficLayer(map);
+      } else {
+        map.once('style.load', () => addTrafficLayer(map));
+      }
+    }
+  }, [addTrafficLayer]);
+
+  const handleMapClick = useCallback(async (event: MapLayerMouseEvent) => {
     const { lngLat } = event;
 
     if (isPickingLocation) {
       // In picking mode, register ambulance at location
       registerAmbulance(lngLat.lat, lngLat.lng);
+    } else if (pickingIncidentLocation) {
+      // In incident location picking mode, fill in the coordinates
+      setIncidentLat(lngLat.lat.toFixed(6));
+      setIncidentLng(lngLat.lng.toFixed(6));
+      setPickingIncidentLocation(false);
+    } else if (editingLocationVehicleId) {
+      // In location edit mode, update the vehicle's location
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000';
+        const response = await fetch(`${apiBase}/api/medical/vehicles/${editingLocationVehicleId}/location`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            latitude: lngLat.lat,
+            longitude: lngLat.lng,
+          }),
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          console.log('Vehicle location updated successfully');
+          // Refresh vehicle list
+          const vehiclesResponse = await fetch(`${apiBase}/api/medical/vehicles`);
+          const vehiclesResult = await vehiclesResponse.json();
+          if (vehiclesResult.success) {
+            setMedicalVehicles(vehiclesResult.vehicles || []);
+          }
+          // Exit edit mode
+          setEditingLocationVehicleId(null);
+        }
+      } catch (error) {
+        console.error('Failed to update vehicle location:', error);
+      }
     } else {
       // Normal mode: set clicked coord for query
       setClickedCoord({ lat: lngLat.lat, lng: lngLat.lng });
     }
-  }, [isPickingLocation, registerAmbulance]);
+  }, [isPickingLocation, registerAmbulance, pickingIncidentLocation, editingLocationVehicleId]);
 
   useEffect(() => {
     if (!clickedCoord) {
@@ -1002,6 +1862,46 @@ export default function Home() {
 
   const hasNearestData = useMemo(() => nearest && nearest.length > 0, [nearest]);
 
+  // Calculate sorted ambulances by availability and distance
+  // Uses animated position (current location) for all calculations
+  const sortedAmbulances = useMemo(() => {
+    if (!clickedCoord || vehicles.length === 0) return [];
+
+    const ambulancesWithDistance = vehicles.map(vehicle => {
+      // Use animated position (current location) for distance calculations
+      const animatedPos = animatedVehicles.get(vehicle.id);
+      const currentLat = animatedPos?.lat ?? vehicle.lat;
+      const currentLng = animatedPos?.lng ?? vehicle.lng;
+      
+      // getDistanceFromLatLonInKm returns meters, convert to km for sorting
+      const distMeters = getDistanceFromLatLonInKm(clickedCoord.lat, clickedCoord.lng, currentLat, currentLng);
+      const distKm = distMeters / 1000;
+      
+      // Get destination if available
+      const destination = vehicleDestinations.get(vehicle.id);
+      
+      return {
+        ...vehicle,
+        currentLat,
+        currentLng,
+        destination,
+        distanceKm: distKm,
+        distanceMeters: Math.round(distMeters),
+        isAvailable: vehicle.status === 'vacant' || !vehicle.status || vehicle.status === 'vacant',
+      };
+    });
+
+    // Sort: available first (by distance), then unavailable (by distance)
+    return ambulancesWithDistance.sort((a, b) => {
+      // First sort by availability (available first)
+      if (a.isAvailable !== b.isAvailable) {
+        return a.isAvailable ? -1 : 1;
+      }
+      // Then sort by distance
+      return a.distanceKm - b.distanceKm;
+    });
+  }, [clickedCoord, vehicles, animatedVehicles, vehicleDestinations]);
+
   useEffect(() => {
     const map = mapRef.current?.getMap();
     if (!map) return;
@@ -1081,6 +1981,8 @@ export default function Home() {
             map.removeLayer('3d-buildings');
           }
         }
+        // Add traffic layer after style loads
+        addTrafficLayer(map);
       });
 
       // If style already loaded, execute directly
@@ -1094,29 +1996,16 @@ export default function Home() {
             map.removeLayer('3d-buildings');
           }
         }
+        // Add traffic layer
+        addTrafficLayer(map);
       }
     }
-  }, [add3DBuildings]);
+  }, [add3DBuildings, addTrafficLayer]);
 
-  // Language detection handlers
+  // Language detection handlers - redirects to incident transcription page
   const toggleLanguageDetection = async () => {
-    if (isRecording) {
-      // Stop recording
-      stopRecording();
-    } else if (showLanguagePanel) {
-      // Panel is open but not recording, close it
-      setShowLanguagePanel(false);
-      setIsPanelMinimized(false);
-    } else {
-      // Open panel and start recording
-      setShowLanguagePanel(true);
-      setIsPanelMinimized(false);
-      setLanguageError(null);
-      setDetectedLanguages([]);
-      setTranslationHistory([]);
-      // Start recording after a brief delay to let panel open
-      setTimeout(() => startRecording(), 100);
-    }
+    // Redirect to incident transcription page
+    window.open('/incident-transcription', '_blank');
   };
 
   const startRecording = async () => {
@@ -1257,6 +2146,37 @@ export default function Home() {
     }
   };
 
+  // Process transcript to extract important details for incident
+  const processIncidentTranscript = async (transcript: string, incidentId: string) => {
+    try {
+      const response = await fetch('/api/extract-incident-details', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ transcript }),
+      });
+
+      const result = await response.json();
+      
+      if (result.success && result.importantDetails) {
+        // Update the incident with the live information
+        setIncidents(prev => prev.map(inc => {
+          if (inc.id === incidentId) {
+            const existingInfo = inc.liveInformation || '';
+            const newInfo = existingInfo 
+              ? `${existingInfo}\n\n[${new Date().toLocaleTimeString()}] ${result.importantDetails}`
+              : `[${new Date().toLocaleTimeString()}] ${result.importantDetails}`;
+            return { ...inc, liveInformation: newInfo };
+          }
+          return inc;
+        }));
+      }
+    } catch (error) {
+      console.error('Error processing incident transcript:', error);
+    }
+  };
+
   // Panel dragging handlers
   const handleLanguagePanelMouseDown = useCallback((e: React.MouseEvent) => {
     if (languagePanelRef.current) {
@@ -1336,7 +2256,7 @@ export default function Home() {
   }
 
   return (
-    <div className={`h-screen w-screen relative ${isPickingLocation ? 'cursor-crosshair' : ''}`}>
+    <div className={`h-screen w-screen relative ${isPickingLocation || editingLocationVehicleId || pickingIncidentLocation ? 'cursor-crosshair' : ''}`}>
       <MapGL
         ref={mapRef}
         initialViewState={{
@@ -1356,7 +2276,174 @@ export default function Home() {
       >
         {/* 3D model layer - added directly to map via useEffect */}
 
-        {/* Paths from vehicles and coordinates to shared location */}
+        {/* Route paths (shortest path from each ambulance's current position to its destination) */}
+        {Array.from(routeData.entries()).map(([vehicleId, route]) => {
+          const progress = routeProgressRef.current.get(vehicleId) || 0;
+          const geometry = route.features[0]?.geometry;
+          
+          if (!geometry || geometry.type !== 'LineString' || !geometry.coordinates) {
+            return null;
+          }
+          
+          const coordinates = geometry.coordinates as Array<[number, number]>;
+          
+          // Get cached route distances for accurate distance-based splitting (same as animation)
+          let routeDistances = routeDistancesCacheRef.current.get(vehicleId);
+          
+          // Calculate distances if not cached (same calculation as animation)
+          if (!routeDistances || routeDistances.length !== coordinates.length) {
+            routeDistances = [0];
+            for (let i = 1; i < coordinates.length; i++) {
+              const prev = coordinates[i - 1];
+              const curr = coordinates[i];
+              if (prev && curr && Array.isArray(prev) && Array.isArray(curr)) {
+                const dLat = curr[1] - prev[1];
+                const dLng = curr[0] - prev[0];
+                const distance = Math.sqrt(dLat * dLat + dLng * dLng);
+                routeDistances.push(routeDistances[i - 1] + distance);
+              } else {
+                routeDistances.push(routeDistances[i - 1]);
+              }
+            }
+            routeDistancesCacheRef.current.set(vehicleId, routeDistances);
+          }
+          
+          // Split route into traveled (grey) and remaining (green) portions using distance-based calculation
+          const traveledCoordinates: Array<[number, number]> = [];
+          const remainingCoordinates: Array<[number, number]> = [];
+          
+          if (progress > 0 && progress < 1 && coordinates.length > 1 && routeDistances.length === coordinates.length) {
+            // Use same distance-based calculation as animation
+            const totalDistance = routeDistances[routeDistances.length - 1];
+            const targetDistance = progress * totalDistance;
+            
+            // Find the segment that contains the target distance (same logic as animation)
+            let segmentIndex = 0;
+            for (let i = 0; i < routeDistances.length - 1; i++) {
+              if (targetDistance >= routeDistances[i] && targetDistance <= routeDistances[i + 1]) {
+                segmentIndex = i;
+                break;
+              }
+              if (targetDistance > routeDistances[i]) {
+                segmentIndex = i;
+              }
+            }
+            segmentIndex = Math.min(segmentIndex, coordinates.length - 2);
+            
+            const segmentStart = routeDistances[segmentIndex];
+            const segmentEnd = routeDistances[segmentIndex + 1];
+            const segmentLength = segmentEnd - segmentStart;
+            const segmentProgress = segmentLength > 0 
+              ? (targetDistance - segmentStart) / segmentLength 
+              : 0;
+            
+            // Add all points up to current segment
+            for (let i = 0; i <= segmentIndex; i++) {
+              traveledCoordinates.push(coordinates[i]);
+            }
+            
+            // Interpolate current position and add to both (same as animation)
+            if (segmentIndex < coordinates.length - 1) {
+              const currentPoint = coordinates[segmentIndex];
+              const nextPoint = coordinates[segmentIndex + 1];
+              if (currentPoint && nextPoint && Array.isArray(currentPoint) && Array.isArray(nextPoint)) {
+                const currentLng = currentPoint[0] + (nextPoint[0] - currentPoint[0]) * segmentProgress;
+                const currentLat = currentPoint[1] + (nextPoint[1] - currentPoint[1]) * segmentProgress;
+                
+                traveledCoordinates.push([currentLng, currentLat]);
+                remainingCoordinates.push([currentLng, currentLat]);
+              }
+            }
+            
+            // Add remaining points
+            for (let i = segmentIndex + 1; i < coordinates.length; i++) {
+              remainingCoordinates.push(coordinates[i]);
+            }
+          } else if (progress >= 1) {
+            // Entire route is traveled
+            traveledCoordinates.push(...coordinates);
+          } else {
+            // No progress yet, entire route is remaining
+            remainingCoordinates.push(...coordinates);
+          }
+          
+          return (
+            <React.Fragment key={`route-fragment-${vehicleId}`}>
+              {/* Traveled portion (grey) */}
+              {traveledCoordinates.length > 1 && (
+                <Source key={`route-traveled-${vehicleId}`} id={`route-traveled-${vehicleId}`} type="geojson" data={{
+                  type: 'FeatureCollection',
+                  features: [{
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: traveledCoordinates,
+                    },
+                  }],
+                }}>
+                  <Layer
+                    id={`route-traveled-glow-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#6b7280',
+                      'line-width': 10,
+                      'line-opacity': 0.2,
+                      'line-blur': 8,
+                    }}
+                  />
+                  <Layer
+                    id={`route-traveled-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#6b7280',
+                      'line-width': 5,
+                      'line-opacity': 0.6,
+                    }}
+                  />
+                </Source>
+              )}
+              
+              {/* Remaining portion (green) */}
+              {remainingCoordinates.length > 1 && (
+                <Source key={`route-remaining-${vehicleId}`} id={`route-remaining-${vehicleId}`} type="geojson" data={{
+                  type: 'FeatureCollection',
+                  features: [{
+                    type: 'Feature',
+                    properties: {},
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: remainingCoordinates,
+                    },
+                  }],
+                }}>
+                  <Layer
+                    id={`route-remaining-glow-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#10b981',
+                      'line-width': 10,
+                      'line-opacity': 0.3,
+                      'line-blur': 8,
+                    }}
+                  />
+                  <Layer
+                    id={`route-remaining-${vehicleId}`}
+                    type="line"
+                    paint={{
+                      'line-color': '#10b981',
+                      'line-width': 5,
+                      'line-opacity': 0.9,
+                      'line-dasharray': [2, 2],
+                    }}
+                  />
+                </Source>
+              )}
+            </React.Fragment>
+          );
+        })}
+
+        {/* Paths from vehicles to all incidents (straight lines) */}
         {pathsData && (
           <Source id="paths" type="geojson" data={pathsData}>
             <Layer
@@ -1384,8 +2471,14 @@ export default function Home() {
 
         {/* Vehicle markers - 2D markers for all vehicles */}
         {/* Show all vehicles in both modes */}
-        {mapLoaded && vehicles.length > 0 && vehicles.map(v => (
-          <Marker key={v.id} longitude={v.lng} latitude={v.lat}>
+        {mapLoaded && vehicles.length > 0 && vehicles.map(v => {
+          // Use animated position if available, otherwise use actual position
+          const animatedPos = animatedVehicles.get(v.id);
+          const displayLat = animatedPos?.lat ?? v.lat;
+          const displayLng = animatedPos?.lng ?? v.lng;
+          
+          return (
+          <Marker key={v.id} longitude={displayLng} latitude={displayLat}>
             <div className={`group relative flex flex-col items-center transition-transform hover:scale-110 hover:z-50 cursor-pointer`}>
               <div className={`px-3 py-1.5 rounded-full shadow-lg border-2 border-white flex items-center gap-1.5 transition-colors ${v.status === 'on_duty'
                 ? 'bg-rose-500 shadow-rose-500/40'
@@ -1404,7 +2497,8 @@ export default function Home() {
               )}
             </div>
           </Marker>
-        ))}
+          );
+        })}
 
         {/* House markers for coordinates */}
         {coordinates.map(coord => (
@@ -1459,23 +2553,58 @@ export default function Home() {
               </div>
             </Marker>
           ))}
-        {/* Shared location marker with message */}
-        {sharedLocation && (
-          <Marker longitude={sharedLocation.lng} latitude={sharedLocation.lat}>
+        {/* Hospital marker */}
+        <Marker longitude={hospital.lng} latitude={hospital.lat}>
+          <div className="relative group">
+            {hospital.icon === 'hospital' ? (
+              <div className="bg-blue-600 w-8 h-8 rounded-lg border-2 border-white shadow-lg shadow-blue-500/40 flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                </svg>
+              </div>
+            ) : hospital.icon === 'cross' ? (
+              <div className="bg-red-600 w-8 h-8 rounded-full border-2 border-white shadow-lg shadow-red-500/40 flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </div>
+            ) : (
+              <div className="bg-blue-600 w-8 h-8 rounded-lg border-2 border-white shadow-lg shadow-blue-500/40 flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </div>
+            )}
+            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-1 bg-black/20 blur-sm rounded-full"></div>
+            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-32 bg-white rounded-lg shadow-lg p-2 border border-slate-100 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              <div className="text-xs font-bold text-slate-700 text-center">Hospital</div>
+              <div className="text-[10px] text-slate-500 text-center mt-1">{hospital.lat.toFixed(5)}, {hospital.lng.toFixed(5)}</div>
+            </div>
+          </div>
+        </Marker>
+
+        {/* Incident markers with messages */}
+        {incidents.filter(inc => {
+          if (inc.resolved) return false;
+          const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+          return assignment?.phase !== 'returning';
+        }).map(incident => (
+          <Marker key={incident.id} longitude={incident.lng} latitude={incident.lat}>
             <div className="relative group">
               <div className="bg-rose-500 w-5 h-5 rounded-full border-2 border-white shadow-lg shadow-rose-500/40 animate-bounce"></div>
               <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-1 bg-black/20 blur-sm rounded-full"></div>
-              {sharedLocation.message && (
+              {incident.message && (
                 <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-3 w-48 bg-white rounded-2xl shadow-xl p-3 border border-slate-100">
                   <div className="text-sm text-slate-700 font-medium whitespace-pre-wrap break-words text-center">
-                    "{sharedLocation.message}"
+                    "{incident.message}"
                   </div>
                   <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-white"></div>
                 </div>
               )}
             </div>
           </Marker>
-        )}
+        ))}
       </MapGL>
       <div className="absolute left-4 bottom-8 bg-white/80 backdrop-blur-md rounded-2xl shadow-2xl shadow-indigo-500/10 px-4 py-3 text-xs text-slate-700 pointer-events-none border border-white/50">
         <div className="text-[0.65rem] uppercase tracking-wider text-indigo-500 mb-1 font-bold">Selected Location</div>
@@ -1490,7 +2619,7 @@ export default function Home() {
       </div>
       <div
         ref={sidebarRef}
-        className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-6 top-6' : ''}`}
+        className={`absolute ${sidebarCollapsed ? 'w-14' : 'w-72'} max-h-[70vh] overflow-hidden flex flex-col bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-900/10 border border-white/60 ${isDragging ? 'cursor-grabbing transition-none' : 'cursor-default transition-all duration-500 cubic-bezier(0.4, 0, 0.2, 1)'} ${!sidebarPosition ? 'left-4 top-[180px]' : ''}`}
         style={{
           left: sidebarPosition ? sidebarPosition.x : undefined,
           top: sidebarPosition ? sidebarPosition.y : undefined,
@@ -1619,7 +2748,132 @@ export default function Home() {
               </div>
             )}
 
-            {clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
+            {/* Incidents list - show in medical mode */}
+            {viewMode === 'medical' && incidents.filter(inc => {
+              if (inc.resolved) return false;
+              const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+              return assignment?.phase !== 'returning';
+            }).length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-bold text-rose-500 uppercase tracking-wider mb-2 px-2">Incidents</p>
+                <ul className="space-y-2 p-2">
+                  {incidents.filter(inc => {
+                    if (inc.resolved) return false;
+                    const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                    return assignment?.phase !== 'returning';
+                  }).map((incident, idx) => {
+                    // Find closest available ambulance
+                    const availableAmbulances = sortedAmbulances.filter(amb => amb.isAvailable);
+                    const closestAmbulance = availableAmbulances.length > 0 ? availableAmbulances[0] : null;
+                    const incidentDistance = closestAmbulance ? 
+                      getDistanceFromLatLonInKm(incident.lat, incident.lng, closestAmbulance.currentLat, closestAmbulance.currentLng) : null;
+                    
+                    return (
+                      <li
+                        key={incident.id}
+                        className="group relative border rounded-xl px-4 py-3 bg-rose-50 border-rose-100 hover:border-rose-200 hover:shadow-rose-500/10 hover:shadow-lg transition-all duration-300"
+                      >
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-rose-500 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-800 truncate pr-2">Incident #{idx + 1}</span>
+                            {incident.assignedAmbulanceId && (
+                              <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                                ASSIGNED
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {incident.message && (
+                          <div className="text-xs text-slate-600 mb-2 italic">"{incident.message}"</div>
+                        )}
+                        {closestAmbulance && incidentDistance !== null && (
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-medium text-rose-600">
+                              Closest: {formatDistance(Math.round(incidentDistance))}
+                            </div>
+                            {!incident.assignedAmbulanceId && closestAmbulance.isAvailable && (
+                              <button
+                                onClick={() => assignAmbulanceToIncident(closestAmbulance.id, incident.id)}
+                                className="px-3 py-1.5 bg-rose-500 text-white text-xs font-bold rounded-lg hover:bg-rose-600 transition-colors"
+                              >
+                                Assign {closestAmbulance.name}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {/* Ambulances list */}
+            {clickedCoord && sortedAmbulances.length > 0 && (
+              <div className="mb-4">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-2">Ambulances</p>
+                <ul className="space-y-2 p-2">
+                  {sortedAmbulances.map((ambulance, idx) => {
+                    const assignment = ambulanceIncidentAssignments.get(ambulance.id);
+                    const assignedIncident = assignment ? incidents.find(inc => inc.id === assignment.incidentId) : null;
+                    
+                    return (
+                      <li
+                        key={ambulance.id}
+                        className={`group relative border rounded-xl px-4 py-3 hover:shadow-lg transition-all duration-300 cursor-pointer ${
+                          ambulance.isAvailable
+                            ? 'bg-emerald-50 border-emerald-100 hover:border-emerald-200 hover:shadow-emerald-500/10'
+                            : 'bg-rose-50 border-rose-100 hover:border-rose-200 hover:shadow-rose-500/10'
+                        }`}
+                      >
+                        <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl opacity-0 group-hover:opacity-100 transition-opacity ${
+                          ambulance.isAvailable ? 'bg-emerald-500' : 'bg-rose-500'
+                        }`}></div>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-800 truncate pr-2">{ambulance.name || `Vehicle ${ambulance.id.slice(0, 8)}`}</span>
+                            <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+                              ambulance.isAvailable
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-rose-100 text-rose-700'
+                            }`}>
+                              {ambulance.isAvailable ? 'AVAILABLE' : 'BUSY'}
+                            </span>
+                            {assignment && (
+                              <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                                {assignment.phase === 'going' ? 'GOING' : assignment.phase === 'waiting' ? 'AT SCENE' : 'RETURNING'}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded-md">#{idx + 1}</span>
+                        </div>
+                        {assignedIncident && (
+                          <div className="text-xs text-slate-600 mb-1 italic">Incident: "{assignedIncident.message || 'No message'}"</div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <div className={`text-xs font-medium ${
+                            ambulance.isAvailable ? 'text-emerald-600' : 'text-rose-600'
+                          }`}>
+                            {formatDistance(ambulance.distanceMeters)}
+                          </div>
+                          {ambulance.destination && (
+                            <div className="text-[10px] text-slate-400 italic">
+                              → {ambulance.destination.lat.toFixed(4)}, {ambulance.destination.lng.toFixed(4)}
+                            </div>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {/* Language points - only show in medical mode */}
+            {viewMode === 'medical' && clickedCoord && !nearestLoading && !nearestError && hasNearestData && (
+              <div>
+                <p className="text-xs font-bold text-indigo-500 uppercase tracking-wider mb-2 px-2">Language Points</p>
               <ul className="space-y-2 p-2">
                 {nearest!.map((location, idx) => (
                   <li
@@ -1640,27 +2894,244 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
+              </div>
             )}
-            {clickedCoord && !nearestLoading && !nearestError && !hasNearestData && (
+            {clickedCoord && !nearestLoading && !nearestError && sortedAmbulances.length === 0 && (!hasNearestData || viewMode === 'user') && (
               <p className="text-slate-500 text-center py-8">No data available nearby.</p>
             )}
           </div>
         )}
       </div>
 
+      {/* Incidents Popup */}
+      {showIncidentsPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-[90vw] max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-slate-200 bg-gradient-to-r from-rose-50 to-rose-100">
+              <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-3">
+                <svg className="w-8 h-8 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                Incident Management
+              </h2>
+              <button
+                onClick={() => setShowIncidentsPopup(false)}
+                className="p-2 hover:bg-rose-200 rounded-full transition-colors"
+              >
+                <svg className="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Active Incidents */}
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-rose-500"></span>
+                  Active Incidents ({incidents.filter(inc => {
+                    if (inc.resolved) return false;
+                    const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                    return assignment?.phase !== 'returning';
+                  }).length})
+                </h3>
+                {incidents.filter(inc => {
+                  if (inc.resolved) return false;
+                  const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                  return assignment?.phase !== 'returning';
+                }).length > 0 ? (
+                  <div className="space-y-3">
+                    {incidents.filter(inc => {
+                      if (inc.resolved) return false;
+                      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                      return assignment?.phase !== 'returning';
+                    }).map((incident, idx) => {
+                      const assignment = incident.assignedAmbulanceId 
+                        ? ambulanceIncidentAssignments.get(incident.assignedAmbulanceId)
+                        : null;
+                      const assignedAmbulance = incident.assignedAmbulanceId 
+                        ? vehicles.find(v => v.id === incident.assignedAmbulanceId)
+                        : null;
+                      
+                      return (
+                        <div key={incident.id} className="bg-rose-50 border border-rose-200 rounded-xl p-4">
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-bold text-slate-800">Incident #{idx + 1}</span>
+                                <span className="text-xs text-slate-400 font-mono">({incident.id})</span>
+                                {assignment && (
+                                  <span className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                    assignment.phase === 'going' ? 'bg-blue-100 text-blue-700' :
+                                    assignment.phase === 'waiting' ? 'bg-yellow-100 text-yellow-700' :
+                                    'bg-green-100 text-green-700'
+                                  }`}>
+                                    {assignment.phase === 'going' ? 'EN ROUTE' : assignment.phase === 'waiting' ? 'AT SCENE' : 'RETURNING'}
+                                  </span>
+                                )}
+                              </div>
+                              {incident.message && (
+                                <div className="text-sm text-slate-600 italic mb-2">"{incident.message}"</div>
+                              )}
+                              {incident.liveInformation && (
+                                <div className="bg-white border border-rose-300 rounded-lg p-3 mt-2 mb-2">
+                                  <div className="text-xs font-bold text-rose-700 uppercase tracking-wider mb-1">Live Information</div>
+                                  <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                                </div>
+                              )}
+                              <div className="text-xs text-slate-500 font-mono">
+                                {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                              </div>
+                            </div>
+                            {assignedAmbulance && (
+                              <div className="text-right">
+                                <div className="text-sm font-bold text-slate-800">{assignedAmbulance.name || 'Unknown'}</div>
+                                {assignment?.phase === 'returning' && incident.assignedAmbulanceId && (
+                                  <div className="text-xs text-green-600 font-medium">
+                                    ETA: {calculateETA(incident.assignedAmbulanceId, assignment) || 'Calculating...'} min
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-slate-400">No active incidents</div>
+                )}
+              </div>
+
+              {/* Returning Ambulances with ETA */}
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-green-500"></span>
+                  Returning to Hospital ({Array.from(ambulanceIncidentAssignments.entries()).filter(([_, a]) => a.phase === 'returning').length})
+                </h3>
+                {Array.from(ambulanceIncidentAssignments.entries()).filter(([_, a]) => a.phase === 'returning').length > 0 ? (
+                  <div className="space-y-3">
+                    {Array.from(ambulanceIncidentAssignments.entries())
+                      .filter(([_, assignment]) => assignment.phase === 'returning')
+                      .map(([ambulanceId, assignment]) => {
+                        const ambulance = vehicles.find(v => v.id === ambulanceId);
+                        const eta = calculateETA(ambulanceId, assignment);
+                        // Get the incident from the incidents array to get the latest data including liveInformation
+                        const incident = incidents.find(inc => inc.id === assignment.incidentId);
+                        
+                        return (
+                          <div key={ambulanceId} className="bg-green-50 border border-green-200 rounded-xl p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex-1">
+                                <div className="font-bold text-slate-800 mb-1">
+                                  {ambulance?.name || `Vehicle ${ambulanceId.slice(0, 8)}`}
+                                </div>
+                                {incident?.message && (
+                                  <div className="text-sm text-slate-600 italic mb-1">"{incident.message}"</div>
+                                )}
+                                {incident && (
+                                  <div className="text-xs text-slate-500">
+                                    From: {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <div className="text-lg font-bold text-green-600">
+                                  {eta ? `${eta} min` : 'Calculating...'}
+                                </div>
+                                <div className="text-xs text-slate-500">ETA</div>
+                              </div>
+                            </div>
+                            {incident?.liveInformation && (
+                              <div className="bg-white border border-green-300 rounded-lg p-3 mt-2">
+                                <div className="text-xs font-bold text-green-700 uppercase tracking-wider mb-1">Live Information</div>
+                                <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-slate-400">No ambulances returning</div>
+                )}
+              </div>
+
+              {/* Incidents at Hospital (ER) */}
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+                  In Emergency Room ({incidents.filter(inc => inc.resolved).length})
+                </h3>
+                {incidents.filter(inc => inc.resolved).length > 0 ? (
+                  <div className="space-y-3">
+                    {incidents.filter(inc => inc.resolved).map((incident: Incident, idx: number) => (
+                      <div key={incident.id} className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-bold text-slate-800">Incident #{idx + 1}</span>
+                              <span className="text-xs text-slate-500">
+                                Arrived: {incident.arrivedAt ? new Date(incident.arrivedAt).toLocaleTimeString() : 'Unknown'}
+                              </span>
+                            </div>
+                            {incident.message && (
+                              <div className="text-sm text-slate-600 italic mb-2">"{incident.message}"</div>
+                            )}
+                            {incident.liveInformation && (
+                              <div className="bg-white border border-blue-300 rounded-lg p-3 mt-2 mb-2">
+                                <div className="text-xs font-bold text-blue-700 uppercase tracking-wider mb-1">Live Information</div>
+                                <div className="text-sm text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                              </div>
+                            )}
+                            <div className="text-xs text-slate-500 font-mono mb-1">
+                              Location: {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                            </div>
+                            {incident.ambulanceName && (
+                              <div className="text-xs text-blue-600 font-medium">
+                                Brought by: {incident.ambulanceName}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-slate-400">No incidents in ER</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Debug info */}
       {process.env.NODE_ENV === 'development' && (
         <div className="absolute bottom-4 left-4 bg-black bg-opacity-75 text-white text-xs p-2 rounded z-10">
           <div>Mode: {viewMode === 'medical' ? 'Medical' : 'User'}</div>
-          <div>Vehicles: {vehicles.length} (on_duty: {vehicles.filter(v => v.status === 'on_duty').length}, vacant: {vehicles.filter(v => !v.status || v.status === 'vacant').length})</div>
+          <div>
+            Vehicles: {vehicles.length} (on_duty:{' '}
+            {vehicles.filter(v => v.status === 'on_duty').length}, vacant:{' '}
+            {vehicles.filter(v => !v.status || v.status === 'vacant').length})
+          </div>
           {viewMode === 'medical' && <div>Medical Vehicles: {medicalVehicles.length}</div>}
           <div>Coordinates: {coordinates.length}</div>
+          <div>
+            Clicked:{' '}
+            {clickedCoord
+              ? `${clickedCoord.lat.toFixed(5)}, ${clickedCoord.lng.toFixed(5)}`
+              : 'none'}
+          </div>
           <div>Map loaded: {mapLoaded ? 'Yes' : 'No'}</div>
           {vehicles.length > 0 && (
             <div className="mt-1">
               {vehicles.map(v => (
                 <div key={v.id}>
-                  {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} ({v.status || 'unknown'})
+                  {v.name || v.id.slice(0, 8)}: {v.lat.toFixed(4)}, {v.lng.toFixed(4)} (
+                  {v.status || 'unknown'})
                 </div>
               ))}
             </div>
@@ -1704,6 +3175,68 @@ export default function Home() {
             )}
           </button>
         )}
+        {viewMode === 'medical' && (
+          <button
+            onClick={() => {
+              const map = mapRef.current?.getMap();
+              if (!map) return;
+
+              // Default Philly view
+              const phillyView = {
+                longitude: -75.16,
+                latitude: 39.95,
+                zoom: 12,
+                pitch: mapStyle === 'street' ? 45 : 0,
+                bearing: 0
+              };
+
+              if (isEarthView) {
+                // Switch to Philly view
+                map.flyTo({
+                  center: [phillyView.longitude, phillyView.latitude],
+                  zoom: phillyView.zoom,
+                  pitch: phillyView.pitch,
+                  bearing: phillyView.bearing,
+                  duration: 2000,
+                });
+                setIsEarthView(false);
+              } else {
+                // Switch to earth view
+                map.flyTo({
+                  center: [0, 0], // Center of the world
+                  zoom: 1.5,
+                  pitch: 0,
+                  bearing: 0,
+                  duration: 2000,
+                });
+                setIsEarthView(true);
+              }
+            }}
+            className={`px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm ${isEarthView
+              ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-500/30'
+              : 'bg-blue-500 text-white hover:bg-blue-600 shadow-blue-500/30'
+              }`}
+          >
+            <span className="flex items-center gap-2">
+              {isEarthView ? (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  Philly View
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Earth View
+                </>
+              )}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Map style toggle buttons */}
@@ -1732,10 +3265,10 @@ export default function Home() {
         </div>
         {viewMode === 'user' && (
           <button
-            onClick={() => setShowSharePanel(!showSharePanel)}
-            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-emerald-500 text-white hover:bg-emerald-600 shadow-emerald-500/30"
+            onClick={() => setShowIncidentPanel(!showIncidentPanel)}
+            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-orange-500 text-white hover:bg-orange-600 shadow-orange-500/30"
           >
-            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> Share Location</span>
+            <span className="flex items-center gap-2"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Report Incident</span>
           </button>
         )}
         <button
@@ -1761,10 +3294,20 @@ export default function Home() {
             {isRecording ? (
               <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" /></svg> Stop Recording</>
             ) : (
-              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Detect Language</>
+              <><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> Start Transcription</>
             )}
           </span>
         </button>
+        {viewMode === 'medical' && (
+          <button
+            onClick={() => setShowIncidentsPopup(true)}
+            className="px-6 py-3 rounded-full shadow-xl font-bold transition-all duration-300 transform hover:scale-105 active:scale-95 backdrop-blur-sm bg-rose-500 text-white hover:bg-rose-600 shadow-rose-500/30"
+          >
+            <span className="flex items-center gap-2">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg> Incidents
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Bottom right buttons - different for each mode */}
@@ -1788,15 +3331,15 @@ export default function Home() {
         )}
       </div>
 
-      {/* Location share panel */}
-      {showSharePanel && (
+      {/* Incident report panel */}
+      {showIncidentPanel && (
         <div className="absolute top-24 right-4 z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-indigo-500/10 p-6 w-80 border border-white/60 animate-in fade-in zoom-in-95 duration-200">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <span className="text-emerald-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg></span> Share Location
+              <span className="text-rose-500"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg></span> Report Incident
             </h3>
             <button
-              onClick={() => setShowSharePanel(false)}
+              onClick={() => setShowIncidentPanel(false)}
               className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-2 rounded-full transition-all"
             >
               ✕
@@ -1804,19 +3347,36 @@ export default function Home() {
           </div>
 
           <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-2">
             <button
               onClick={getCurrentLocation}
-              className="w-full px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
+                className="px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold shadow-lg shadow-indigo-500/20 hover:bg-indigo-700 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Get Current Location
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg> Share Location
             </button>
+              <button
+                onClick={() => setPickingIncidentLocation(!pickingIncidentLocation)}
+                className={`px-4 py-3 rounded-2xl font-bold shadow-lg hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 ${
+                  pickingIncidentLocation 
+                    ? 'bg-green-600 text-white shadow-green-500/20 hover:bg-green-700' 
+                    : 'bg-indigo-600 text-white shadow-indigo-500/20 hover:bg-indigo-700'
+                }`}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg> {pickingIncidentLocation ? 'Click Map' : 'Pick from Map'}
+              </button>
+            </div>
+            {pickingIncidentLocation && (
+              <div className="px-4 py-2 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 text-center">
+                Click on the map to select location
+              </div>
+            )}
 
             <div className="relative py-2">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-slate-200"></div>
               </div>
               <div className="relative flex justify-center">
-                <span className="px-3 bg-white text-xs font-medium text-slate-400 uppercase tracking-wider">Or Manual</span>
+                <span className="px-3 bg-white text-xs font-medium text-slate-400 uppercase tracking-wider">Fill In</span>
               </div>
             </div>
 
@@ -1826,8 +3386,8 @@ export default function Home() {
                 <input
                   type="number"
                   step="any"
-                  value={shareLat}
-                  onChange={(e) => setShareLat(e.target.value)}
+                  value={incidentLat}
+                  onChange={(e) => setIncidentLat(e.target.value)}
                   placeholder="e.g., 39.95"
                   className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
                 />
@@ -1837,8 +3397,8 @@ export default function Home() {
                 <input
                   type="number"
                   step="any"
-                  value={shareLng}
-                  onChange={(e) => setShareLng(e.target.value)}
+                  value={incidentLng}
+                  onChange={(e) => setIncidentLng(e.target.value)}
                   placeholder="e.g., -75.16"
                   className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
                 />
@@ -1846,18 +3406,18 @@ export default function Home() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 ml-1">Note (Optional)</label>
                 <textarea
-                  value={shareMessage}
-                  onChange={(e) => setShareMessage(e.target.value)}
+                  value={incidentMessage}
+                  onChange={(e) => setIncidentMessage(e.target.value)}
                   placeholder="Add a message..."
                   rows={3}
                   className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all resize-none"
                 />
               </div>
               <button
-                onClick={handleManualShare}
-                className="w-full px-4 py-3 bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-500/20 hover:bg-emerald-600 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
+                onClick={handleManualIncidentReport}
+                className="w-full px-4 py-3 bg-orange-500 text-white rounded-2xl font-bold shadow-lg shadow-orange-500/20 hover:bg-orange-600 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200"
               >
-                Share Location
+                Report Incident
               </button>
             </div>
 
@@ -1965,6 +3525,166 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
+            {/* Hospital Settings */}
+            <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100">
+              <h4 className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-3">Hospital Location</h4>
+              <div className="space-y-3">
+                <div className="text-xs text-slate-600">
+                  <div className="font-mono">{hospital.lat.toFixed(5)}, {hospital.lng.toFixed(5)}</div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Icon</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setHospital(prev => ({ ...prev, icon: 'hospital' }))}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                        hospital.icon === 'hospital'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      🏥 Hospital
+                    </button>
+                    <button
+                      onClick={() => setHospital(prev => ({ ...prev, icon: 'cross' }))}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                        hospital.icon === 'cross'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      ➕ Cross
+                    </button>
+                    <button
+                      onClick={() => setHospital(prev => ({ ...prev, icon: 'pin' }))}
+                      className={`flex-1 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                        hospital.icon === 'pin'
+                          ? 'bg-blue-600 text-white shadow-md'
+                          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      📍 Pin
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Incidents View */}
+            <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100">
+              <h4 className="text-xs font-bold text-rose-600 uppercase tracking-wider mb-3">Incidents</h4>
+              
+              {/* Incidents at Hospital */}
+              {incidents.filter(inc => inc.resolved).length > 0 && (
+                <div className="mb-4">
+                  <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">At Hospital</p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {incidents.filter(inc => inc.resolved).map((incident, idx) => (
+                      <div key={incident.id} className="bg-white p-3 rounded-xl border border-rose-200">
+                        <div className="flex items-start justify-between mb-1">
+                          <span className="text-xs font-bold text-slate-800">Incident #{idx + 1}</span>
+                          <span className="text-[10px] text-slate-400">
+                            {incident.arrivedAt ? new Date(incident.arrivedAt).toLocaleTimeString() : ''}
+                          </span>
+                        </div>
+                        {incident.message && (
+                          <div className="text-xs text-slate-600 mb-1 italic">"{incident.message}"</div>
+                        )}
+                        {incident.liveInformation && (
+                          <div className="bg-slate-50 border border-rose-300 rounded-lg p-2 mt-2 mb-2">
+                            <div className="text-[10px] font-bold text-rose-700 uppercase tracking-wider mb-1">Live Information</div>
+                            <div className="text-xs text-slate-700 whitespace-pre-wrap">{incident.liveInformation}</div>
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-500 font-mono mb-1">
+                          {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                        </div>
+                        {incident.ambulanceName && (
+                          <div className="text-[10px] text-blue-600 font-medium">
+                            Brought by: {incident.ambulanceName}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Active Incidents (excluding returning ambulances) */}
+              {incidents.filter(inc => {
+                if (inc.resolved) return false;
+                const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                return assignment?.phase !== 'returning';
+              }).length > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Active</p>
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {incidents.filter(inc => {
+                      if (inc.resolved) return false;
+                      const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                      return assignment?.phase !== 'returning';
+                    }).map((incident, idx) => {
+                      // Find returning ambulance for this incident
+                      const returningAssignment = Array.from(ambulanceIncidentAssignments.entries()).find(
+                        ([_, assignment]) => assignment.incidentId === incident.id && assignment.phase === 'returning'
+                      );
+                      
+                      let distanceText = 'No ambulance assigned';
+                      if (returningAssignment) {
+                        const [ambulanceId, assignment] = returningAssignment;
+                        const ambulance = vehicles.find(v => v.id === ambulanceId);
+                        const animatedPos = animatedVehicles.get(ambulanceId);
+                        const currentLat = animatedPos?.lat ?? ambulance?.lat;
+                        const currentLng = animatedPos?.lng ?? ambulance?.lng;
+                        
+                        if (ambulance && currentLat && currentLng) {
+                          const distance = getDistanceFromLatLonInKm(
+                            hospital.lat, hospital.lng, currentLat, currentLng
+                          );
+                          distanceText = `${formatDistance(Math.round(distance))} away (${ambulance.name || 'Unknown'})`;
+                        }
+                      } else if (incident.assignedAmbulanceId) {
+                        const assignedAmbulance = vehicles.find(v => v.id === incident.assignedAmbulanceId);
+                        if (assignedAmbulance) {
+                          distanceText = `Assigned to ${assignedAmbulance.name || 'Unknown'}`;
+                        }
+                      }
+                      
+                      return (
+                        <div key={incident.id} className="bg-white p-3 rounded-xl border border-rose-200">
+                          <div className="flex items-start justify-between mb-1">
+                            <span className="text-xs font-bold text-slate-800">Incident #{idx + 1}</span>
+                            <span className="text-[10px] text-slate-400">
+                              {incident.timestamp ? new Date(incident.timestamp).toLocaleTimeString() : ''}
+                            </span>
+                          </div>
+                          {incident.message && (
+                            <div className="text-xs text-slate-600 mb-1 italic">"{incident.message}"</div>
+                          )}
+                          <div className="text-[10px] text-slate-500 font-mono mb-1">
+                            {incident.lat.toFixed(5)}, {incident.lng.toFixed(5)}
+                          </div>
+                          <div className="text-[10px] text-rose-600 font-medium">
+                            {distanceText}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {incidents.filter(inc => inc.resolved).length === 0 && incidents.filter(inc => {
+                if (inc.resolved) return false;
+                const assignment = inc.assignedAmbulanceId ? ambulanceIncidentAssignments.get(inc.assignedAmbulanceId) : null;
+                return assignment?.phase !== 'returning';
+              }).length === 0 && (
+                <div className="text-center py-4 text-xs text-slate-400">
+                  No incidents recorded
+                </div>
+              )}
+            </div>
+
             {/* Initialize Demo Button */}
             <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 text-center">
               <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2">Demo Setup</h4>
@@ -1972,7 +3692,7 @@ export default function Home() {
                 onClick={initializeDemoFleet}
                 className="w-full px-4 py-2 bg-indigo-100 text-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-200 transition-all"
               >
-                Initialize A1, A2, A3 (Philly)
+                Initialize A1, A2, A3 (A1 at Hospital, Busy)
               </button>
             </div>
 
@@ -2056,8 +3776,26 @@ export default function Home() {
                               <span className="text-slate-300"><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg></span>
                             </div>
                           )}
-                          <div className="text-xs font-mono text-slate-400 mt-1">
-                            {vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}
+                          <div className="text-xs font-mono text-slate-400 mt-1 flex items-center gap-2">
+                            <span>{vehicle.latitude.toFixed(4)}, {vehicle.longitude.toFixed(4)}</span>
+                            <button
+                              onClick={() => {
+                                if (editingLocationVehicleId === vehicle.id) {
+                                  setEditingLocationVehicleId(null);
+                                } else {
+                                  setEditingLocationVehicleId(vehicle.id);
+                                }
+                              }}
+                              className={`p-1 rounded hover:bg-slate-100 transition-colors ${editingLocationVehicleId === vehicle.id
+                                ? 'text-indigo-600 bg-indigo-50'
+                                : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                              title={editingLocationVehicleId === vehicle.id ? 'Click map to update location (click again to cancel)' : 'Click to edit location'}
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                            </button>
                           </div>
                         </div>
                         <span
@@ -2070,13 +3808,7 @@ export default function Home() {
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        <button
-                          onClick={() => updateVehicleLocation(vehicle.id)}
-                          className="px-3 py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all"
-                        >
-                          Update Loc
-                        </button>
+                      <div className="mb-3">
                         <button
                           onClick={() =>
                             updateVehicleStatus(
@@ -2084,7 +3816,7 @@ export default function Home() {
                               vehicle.status === 'on_duty' ? 'vacant' : 'on_duty',
                             )
                           }
-                          className={`px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
+                          className={`w-full px-3 py-2 border text-xs font-bold rounded-xl transition-all ${vehicle.status === 'on_duty'
                             ? 'bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100'
                             : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
                             }`}
@@ -2094,21 +3826,6 @@ export default function Home() {
                       </div>
 
                       <div className="space-y-2 pt-3 border-t border-slate-100/50">
-                        {selectedVehicle?.id === vehicle.id && trackingInterval ? (
-                          <button
-                            onClick={stopTracking}
-                            className="w-full px-3 py-2 bg-rose-500 text-white text-xs font-bold rounded-xl hover:bg-rose-600 shadow-sm shadow-rose-500/20 transition-all flex items-center justify-center gap-2"
-                          >
-                            <span className="animate-pulse">●</span> Stop Tracking
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => startTracking(vehicle.id)}
-                            className="w-full px-3 py-2 bg-indigo-600 text-white text-xs font-bold rounded-xl hover:bg-indigo-700 shadow-sm shadow-indigo-500/20 transition-all"
-                          >
-                            Start Live Tracking
-                          </button>
-                        )}
                         <button
                           onClick={() => deleteVehicle(vehicle.id)}
                           className="w-full px-3 py-2 text-rose-500 text-xs font-bold rounded-xl hover:bg-rose-50 transition-all"
